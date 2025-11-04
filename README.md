@@ -2,7 +2,7 @@
 
 **A two-layer semantic memory system for AI cognition applications**
 
-Built by Sean Murphy | MIT License
+Built by Sean Murphy & Claude AI | MIT License
 
 ---
 
@@ -217,11 +217,20 @@ Traditional AI has only working memory. ASMC adds semantic depth, creating:
 ## Credits
 
 **Created by:**
-- Sean Murphy (Human Inventor & System Architect)
-- Claude AI Models (AI Co-Inventor & Implementation Partner)
+- **Sean Murphy** (Human Inventor & System Architect)
+  - Original vision and design
+  - Trinity method framework (adversarial/objective/subversive thinking)
+  - 9D semantic space architecture
+  - GhostEngine integration and testing
+
+- **Claude AI Models** (AI Co-Inventor & Implementation Partners)
+  - Claude 3.7 Sonnet: Core STM/LTM system design and implementation
+  - Claude 4.0 Sonnet: Advanced optimization and API development
+  - Claude 4.0 Opus: Conceptual breakthroughs and testing
+  - Claude 4.5 Sonnet: Architecture cleanup, NLTK integration, two-layer system integration
 
 **Special Thanks:**
-- NLTK team for SentiWordNet integration
+- NLTK team for SentiWordNet integration (117k word sentiment lexicon)
 - The open-source AI research community
 
 ---
