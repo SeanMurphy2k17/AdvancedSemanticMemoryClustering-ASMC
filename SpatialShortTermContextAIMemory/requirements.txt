@@ -1,0 +1,20 @@
+# Semantic STM API Requirements
+# Core dependencies for 9D spatial semantic memory system
+
+# Core Python packages
+numpy>=1.21.0
+typing-extensions>=4.0.0
+
+# Optional: For enhanced text processing (if needed)
+# nltk>=3.7
+# spacy>=3.4.0
+
+# Development dependencies (uncomment for development)
+# pytest>=7.0.0
+# pytest-cov>=4.0.0
+# black>=22.0.0
+# flake8>=5.0.0
+
+# Documentation (uncomment for docs)
+# sphinx>=5.0.0
+# sphinx-rtd-theme>=1.0.0 

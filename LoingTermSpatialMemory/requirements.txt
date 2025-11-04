@@ -1,0 +1,17 @@
+# Long-Term Memory (LTM) API Requirements
+# Minimal dependencies for maximum compatibility
+
+# Core dependencies
+numpy>=1.21.0
+lmdb>=1.4.0
+typing-extensions>=4.0.0
+
+# Optional performance enhancements
+# psutil>=5.8.0  # For system monitoring (optional)
+# ujson>=5.0.0   # For faster JSON processing (optional)
+
+# Development dependencies (uncomment for development)
+# pytest>=7.0.0
+# pytest-cov>=4.0.0
+# black>=22.0.0
+# flake8>=5.0.0 
