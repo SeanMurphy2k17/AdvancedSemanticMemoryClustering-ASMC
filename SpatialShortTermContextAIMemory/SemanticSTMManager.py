@@ -77,6 +77,10 @@ class SemanticSTMManager:
         self.stm_entries = {}  # coord_key -> STMEntry
         self.entry_order = []  # FIFO queue for capacity management
         
+        # SEMANTIC LINKING CONFIG
+        self.max_links_per_memory = 5  # Max semantic neighbors to link
+        self.semantic_match_threshold = 2  # Min overlapping semantic keys for link
+        
         # PERSISTENCE: Rolling pair saves for data integrity
         self.last_save_time = time.time()
         self.dirty = False
@@ -117,11 +121,75 @@ class SemanticSTMManager:
             print(f"✅ STM Manager ready with {len(self.stm_entries)} entries")
             print("🧠" * 30)
     
+    def _find_semantic_matches(self, semantic_keys: List[str], exclude_key: str = None) -> List[str]:
+        """
+        Find existing STM entries with overlapping semantic keys
+        
+        Args:
+            semantic_keys: List of semantic keys from new memory
+            exclude_key: Coordinate key to exclude (usually the current entry)
+        
+        Returns:
+            List of coord_keys for semantically matched memories
+        """
+        matches = []
+        semantic_keys_set = set(semantic_keys)
+        
+        for coord_key, entry in self.stm_entries.items():
+            if coord_key == exclude_key:
+                continue
+            
+            # Count overlapping semantic keys
+            entry_keys_set = set(entry.get('semantic_keys', []))
+            overlap = len(semantic_keys_set & entry_keys_set)
+            
+            if overlap >= self.semantic_match_threshold:
+                matches.append({
+                    'coord_key': coord_key,
+                    'overlap_count': overlap,
+                    'entry': entry
+                })
+        
+        # Sort by overlap (most similar first)
+        matches.sort(key=lambda x: x['overlap_count'], reverse=True)
+        
+        # Return top N coord_keys
+        return [m['coord_key'] for m in matches[:self.max_links_per_memory]]
+    
+    def _create_bidirectional_links(self, new_coord_key: str, matched_keys: List[str]):
+        """
+        Create bidirectional semantic links between memories
+        
+        Args:
+            new_coord_key: The new memory's coordinate key
+            matched_keys: List of semantically matched memory keys
+        """
+        # Add links TO new memory
+        if 'semantic_links' not in self.stm_entries[new_coord_key]:
+            self.stm_entries[new_coord_key]['semantic_links'] = []
+        
+        self.stm_entries[new_coord_key]['semantic_links'] = matched_keys
+        
+        # Add reverse links FROM matched memories back to new memory
+        for matched_key in matched_keys:
+            if matched_key in self.stm_entries:
+                if 'semantic_links' not in self.stm_entries[matched_key]:
+                    self.stm_entries[matched_key]['semantic_links'] = []
+                
+                # Add link if not already present
+                if new_coord_key not in self.stm_entries[matched_key]['semantic_links']:
+                    self.stm_entries[matched_key]['semantic_links'].append(new_coord_key)
+                    
+                    # Cap links per memory
+                    if len(self.stm_entries[matched_key]['semantic_links']) > self.max_links_per_memory:
+                        self.stm_entries[matched_key]['semantic_links'] = \
+                            self.stm_entries[matched_key]['semantic_links'][:self.max_links_per_memory]
+    
     def add_conversation_exchange(self, user_input: str, ai_response: str, 
                                 thought: str = "", objective: str = "", action: str = "", result: str = "",
-                                metadata: Optional[Dict] = None) -> str:
+                                metadata: Optional[Dict] = None) -> Dict:
         """
-        Add a conversation exchange to STM
+        Add a conversation exchange to STM with semantic linking
         
         Args:
             user_input: User's input text
@@ -129,20 +197,20 @@ class SemanticSTMManager:
             metadata: Optional metadata dictionary
             
         Returns:
-            str: Coordinate key of stored entry
+            Dict: Contains new memory + linked neighbor memories for enriched context
         """
         # Create full conversation context
         full_context = f"User: {user_input}\nAI: {ai_response}"
         
         # Process with existing 9D coordinate system
-        result = self.coord_system.process(full_context)
+        coord_result = self.coord_system.process(full_context)
         
         # Create STM entry with separated cognitive stages + result
         stm_entry = {
-            'coord_key': result['coordinate_key'],
-            'coordinates': result['coordinates'],
-            'semantic_summary': result['summary'],
-            'semantic_keys': result['semantic_keys'],
+            'coord_key': coord_result['coordinate_key'],
+            'coordinates': coord_result['coordinates'],
+            'semantic_summary': coord_result['summary'],
+            'semantic_keys': coord_result['semantic_keys'],
             'full_context': full_context,
             'user_input': user_input,
             'ai_response': ai_response,
@@ -152,15 +220,23 @@ class SemanticSTMManager:
             'result': result,  # Action consequence for causal learning
             'timestamp': time.time(),
             'datetime': datetime.now().isoformat(),
-            'metadata': metadata or {}
+            'metadata': metadata or {},
+            'semantic_links': []  # Will be populated below
         }
         
         # Store in RAM instantly (microsecond access)
-        coord_key = result['coordinate_key']
+        coord_key = coord_result['coordinate_key']
         self.stm_entries[coord_key] = stm_entry
         self.entry_order.append(coord_key)
         self.dirty = True
         self.stats['total_added'] += 1
+        
+        # BUILD SEMANTIC LINKS (the critical missing piece!)
+        semantic_matches = self._find_semantic_matches(coord_result['semantic_keys'], exclude_key=coord_key)
+        if semantic_matches:
+            self._create_bidirectional_links(coord_key, semantic_matches)
+            if self.verbose:
+                print(f"🔗 Created {len(semantic_matches)} semantic links for new memory")
         
         # Capacity management - promote oldest to long-term
         if len(self.stm_entries) > self.max_entries:
@@ -170,19 +246,28 @@ class SemanticSTMManager:
         self._maybe_save_background()
         
         if self.verbose:
-            print(f"🧠 STM added: {result['summary'][:50]}... → {coord_key[:20]}...")
+            print(f"🧠 STM added: {coord_result['summary'][:50]}... → {coord_key[:20]}...")
         
-        return coord_key
+        # Return new memory + linked neighbors for enriched context
+        linked_memories = [self.stm_entries[key] for key in semantic_matches if key in self.stm_entries]
+        
+        return {
+            'coord_key': coord_key,
+            'new_memory': stm_entry,
+            'linked_memories': linked_memories,
+            'link_count': len(semantic_matches)
+        }
     
     def search_relevant_context(self, query_text: str, top_k: int = 5, 
-                              max_distance: float = 2.0) -> List[Dict]:
+                              max_distance: float = 2.0, traverse_links: bool = True) -> List[Dict]:
         """
-        Search STM for semantically relevant context using 9D spatial search
+        Search STM for semantically relevant context using 9D spatial search + link traversal
         
         Args:
             query_text: Query text to find relevant context for
             top_k: Number of top results to return
             max_distance: Maximum 9D distance for relevance
+            traverse_links: If True, also includes linked memories
             
         Returns:
             List of relevant STM entries with distance scores
@@ -196,6 +281,8 @@ class SemanticSTMManager:
         
         # Calculate distances to all STM entries
         matches = []
+        seen_keys = set()
+        
         for coord_key, entry in self.stm_entries.items():
             distance = self._calculate_9d_distance(query_coords, entry['coordinates'])
             
@@ -206,6 +293,27 @@ class SemanticSTMManager:
                     'relevance_score': 1.0 - (distance / max_distance),
                     'coord_key': coord_key
                 })
+                seen_keys.add(coord_key)
+        
+        # TRAVERSE SEMANTIC LINKS for enriched context!
+        if traverse_links and matches:
+            linked_additions = []
+            for match in matches[:top_k]:  # Only traverse top matches
+                entry = match['entry']
+                for linked_key in entry.get('semantic_links', []):
+                    if linked_key not in seen_keys and linked_key in self.stm_entries:
+                        linked_entry = self.stm_entries[linked_key]
+                        linked_additions.append({
+                            'entry': linked_entry,
+                            'distance': self._calculate_9d_distance(query_coords, linked_entry['coordinates']),
+                            'relevance_score': 0.8,  # Slightly lower (indirect match)
+                            'coord_key': linked_key,
+                            'source': 'semantic_link'  # Mark as link-derived
+                        })
+                        seen_keys.add(linked_key)
+            
+            # Add linked memories to results
+            matches.extend(linked_additions)
         
         # Sort by distance (closest = most relevant)
         matches.sort(key=lambda x: x['distance'])
@@ -214,9 +322,11 @@ class SemanticSTMManager:
         self.stats['cache_hits'] += len(matches)
         
         if self.verbose and matches:
-            print(f"🔍 STM search: '{query_text[:30]}...' → {len(matches)} matches")
+            direct = len([m for m in matches if 'source' not in m])
+            linked = len([m for m in matches if m.get('source') == 'semantic_link'])
+            print(f"🔍 STM search: '{query_text[:30]}...' → {direct} direct + {linked} linked = {len(matches)} total")
         
-        return matches[:top_k]
+        return matches[:top_k * 2 if traverse_links else top_k]  # Return more if including links
     
     def get_recent_context(self, count: int = 3) -> List[Dict]:
         """

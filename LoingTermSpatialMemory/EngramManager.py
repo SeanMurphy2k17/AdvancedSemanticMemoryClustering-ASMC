@@ -346,16 +346,17 @@ class EngramManager:
         
         return confident + serendipity
     
-    def search_similar(self, query_text: str, max_results: int = 5) -> List[Dict]:
+    def search_similar(self, query_text: str, max_results: int = 5, traverse_links: bool = True) -> List[Dict]:
         """
-        Search for similar memories using coordinate-based search WITH relevance filtering
+        Search for similar memories using coordinate-based search WITH link traversal
         
         Args:
             query_text: Query text
             max_results: Maximum number of results (before filtering)
+            traverse_links: If True, follow semantic_links to enrich results
             
         Returns:
-            List[Dict]: Filtered and scored memories (relevance_score included)
+            List[Dict]: Filtered and scored memories with linked neighbors
         """
         try:
             # Process query to get coordinates and semantic data
@@ -379,13 +380,19 @@ class EngramManager:
             # Apply relevance filtering
             filtered_results = self._filter_by_relevance(raw_results, query_result)
             
-            # Limit to requested count after filtering
-            final_results = filtered_results[:max_results]
+            # TRAVERSE SEMANTIC LINKS for enriched context!
+            if traverse_links and filtered_results:
+                enriched_results = self._traverse_semantic_links(filtered_results, query_coords, max_results)
+                final_results = enriched_results[:max_results]
+            else:
+                final_results = filtered_results[:max_results]
             
             if final_results:
                 self.total_retrieved += len(final_results)
                 if self.verbose:
-                    print(f"   ✅ Returning {len(final_results)} relevant memories")
+                    direct = len([r for r in final_results if not r.get('via_link')])
+                    linked = len([r for r in final_results if r.get('via_link')])
+                    print(f"   ✅ Returning {direct} direct + {linked} linked = {len(final_results)} memories")
             
             return final_results
             
@@ -393,6 +400,58 @@ class EngramManager:
             if self.verbose:
                 print(f"❌ Search failed: {e}")
             return []
+    
+    def _traverse_semantic_links(self, seed_results: List[Dict], query_coords: Dict, max_depth: int = 1) -> List[Dict]:
+        """
+        Traverse semantic links from seed results to enrich context
+        
+        Args:
+            seed_results: Initial coordinate-matched memories
+            query_coords: Query coordinates for distance calculation
+            max_depth: How many link hops to traverse (default: 1)
+        
+        Returns:
+            Combined list of seed + linked memories
+        """
+        enriched = seed_results.copy()
+        seen_ids = {r.get('id') for r in seed_results}
+        
+        # Traverse links from each seed result
+        for seed in seed_results:
+            semantic_links = seed.get('semantic_links', {})
+            
+            # Follow succession links (temporal chain)
+            for succ_link in semantic_links.get('succession_links', []):
+                target_id = succ_link.get('target_memory_id')
+                if target_id and target_id not in seen_ids:
+                    # Retrieve linked memory
+                    linked_coords = succ_link.get('target_coordinates', {})
+                    linked_memory = self.retrieve_by_coordinates(linked_coords)
+                    
+                    if linked_memory:
+                        linked_memory['via_link'] = 'succession'
+                        linked_memory['relevance_score'] = 0.85  # High (temporal context)
+                        enriched.append(linked_memory)
+                        seen_ids.add(target_id)
+            
+            # Follow radial links (semantic neighbors)
+            for radial_link in semantic_links.get('radial_links', []):
+                target_id = radial_link.get('target_memory_id')
+                if target_id and target_id not in seen_ids:
+                    # Retrieve linked memory
+                    linked_coords = radial_link.get('target_coordinates', {})
+                    linked_memory = self.retrieve_by_coordinates(linked_coords)
+                    
+                    if linked_memory:
+                        linked_memory['via_link'] = 'radial'
+                        linked_memory['relevance_score'] = radial_link.get('strength', 0.7)
+                        enriched.append(linked_memory)
+                        seen_ids.add(target_id)
+        
+        # Sort by relevance (direct matches first, then linked)
+        enriched.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
+        
+        return enriched
     
     def process_text_list(self, text_list: List[str], show_progress: bool = True) -> Dict:
         """
