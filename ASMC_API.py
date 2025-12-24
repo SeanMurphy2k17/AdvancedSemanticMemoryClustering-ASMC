@@ -312,9 +312,20 @@ class AdvancedSemanticMemory:
         return 0.0
     
     def get_spatial_context(self, structure_type: str, cluster_id: str, coordinates: dict,
-                           radius: int = 0, include_ltm: bool = True, max_memories: int = 5):
+                           radius: int = 0, include_ltm: bool = True, max_memories: int = 5,
+                           use_cone_search: bool = True, query_text: str = None):
         """
         Get integrated spatial + semantic context for a location
+        
+        Two modes:
+        1. Radial Search (default): Returns memories near coordinates
+        2. Cone Search (use_cone_search=True): Semantic cone search using query's 9D valence
+        
+        Cone search mimics hippocampal memory retrieval:
+        - Extracts cone parameters from query's semantic coordinate (9D)
+        - Searches semantic space using directional cone
+        - Adapts based on memory density and system maturity
+        - Returns emergently-relevant memories
         
         Returns:
         - SCM node (structure, entities, neighbors, statistics)
@@ -329,12 +340,199 @@ class AdvancedSemanticMemory:
             radius: Include nearby nodes (not yet implemented)
             include_ltm: Include LTM patterns
             max_memories: Maximum STM memories to return
+            use_cone_search: Enable semantic cone search (default: False)
+            query_text: Query text for semantic coordinate generation (required if use_cone_search=True)
             
         Returns:
             Dict with complete spatial + semantic context
         """
         if not self.scm:
             return None
+        
+        # ============================================================
+        # CONE SEARCH MODE - Semantic space directional retrieval
+        # ============================================================
+        if use_cone_search:
+            if query_text is None:
+                raise ValueError("query_text required when use_cone_search=True")
+            
+            if self.verbose:
+                print(f"\n[CONE SEARCH] Initiating semantic cone search")
+                print(f"[CONE SEARCH] Query: {query_text}")
+            
+            # Generate query's semantic coordinate
+            from spatial_valence import UltraEnhancedSpatialValenceToCoordGeneration
+            coord_gen = UltraEnhancedSpatialValenceToCoordGeneration()
+            query_result = coord_gen.process(query_text)
+            query_coords = query_result['coordinates']
+            
+            # Extract semantic parameters (9D → 3x3D)
+            semantic_position = (query_coords[0], query_coords[1], query_coords[2])
+            semantic_direction = (query_coords[3], query_coords[4], query_coords[5])
+            semantic_shape = (query_coords[6], query_coords[7], query_coords[8])
+            
+            if self.verbose:
+                print(f"[CONE SEARCH] Semantic position: {semantic_position}")
+                print(f"[CONE SEARCH] Semantic direction: {semantic_direction}")
+                print(f"[CONE SEARCH] Semantic shape: {semantic_shape}")
+            
+            # === STAGE 1: RADIAL RETRIEVAL ===
+            all_nodes = self.scm.get_cluster_nodes(cluster_id)
+            
+            # Count memories for density calculation
+            total_memories = sum(len(node.get('stm_coord_keys', [])) for node in all_nodes)
+            memory_count = len(all_nodes)
+            memory_density = total_memories / max(1, memory_count)
+            
+            # Calculate tightening factor (exponential maturity curve)
+            import math
+            total_system_memories = self.get_statistics().get('total_stm_links', 0)
+            k = 0.001  # Tightening rate
+            tightening_factor = -1.0 + (2.0 / (1.0 + math.exp(-k * total_system_memories)))
+            
+            # Map semantic shape to cone parameters
+            cone_radius = abs(semantic_shape[0]) * memory_density * (1.0 + tightening_factor)
+            cone_taper = abs(semantic_shape[1])
+            cone_length = abs(semantic_shape[2]) * memory_density * (1.0 + tightening_factor)
+            
+            # Clamp to reasonable ranges
+            cone_radius = max(0.1, min(5.0, cone_radius))
+            cone_taper = max(0.01, min(1.0, cone_taper))
+            cone_length = max(0.5, min(10.0, cone_length))
+            
+            if self.verbose:
+                print(f"[STAGE 1] Radial: {memory_count} nodes, {total_memories} memories, density={memory_density:.2f}")
+                print(f"[STAGE 1] Tightening: {tightening_factor:.4f} (from {total_system_memories} total memories)")
+                print(f"[STAGE 1] Cone params: radius={cone_radius:.2f}, taper={cone_taper:.2f}, length={cone_length:.2f}")
+            
+            # === STAGE 2: DIRECTION FILTER ===
+            semantic_direction_normalized = self._normalize_vector(semantic_direction)
+            direction_filtered = []
+            
+            for node in all_nodes:
+                for memory_coord_key in node.get('stm_coord_keys', []):
+                    # Parse memory's semantic coordinate
+                    memory_coords = self._parse_coordinate_key(memory_coord_key)
+                    if not memory_coords:
+                        continue
+                    
+                    memory_position = (memory_coords[0], memory_coords[1], memory_coords[2])
+                    
+                    # Calculate semantic offset
+                    offset = self._subtract_vectors(memory_position, semantic_position)
+                    offset_mag = self._magnitude(offset)
+                    
+                    if offset_mag < 1e-6:
+                        continue
+                    
+                    # Check directional alignment
+                    offset_normalized = self._normalize_vector(offset)
+                    alignment = self._dot_product(offset_normalized, semantic_direction_normalized)
+                    
+                    if alignment > 0:  # Forward hemisphere
+                        direction_filtered.append({
+                            'node': node,
+                            'memory_coord_key': memory_coord_key,
+                            'memory_coords': memory_coords,
+                            'alignment': alignment,
+                            'offset': offset
+                        })
+            
+            if self.verbose:
+                print(f"[STAGE 2] Direction: {len(direction_filtered)} memories in cone direction")
+            
+            # === STAGE 3: CONE SHAPE FILTER ===
+            cone_filtered = []
+            
+            for item in direction_filtered:
+                offset = item['offset']
+                
+                # Project onto direction axis
+                projection = self._dot_product(offset, semantic_direction_normalized)
+                
+                # Check length bound
+                if projection < 0 or projection > cone_length:
+                    continue
+                
+                # Calculate cone radius at this projection distance
+                cone_radius_at_d = cone_radius + (cone_taper * projection)
+                
+                # Calculate perpendicular distance from axis
+                parallel_component = self._scale_vector(semantic_direction_normalized, projection)
+                perpendicular = self._subtract_vectors(offset, parallel_component)
+                perp_distance = self._magnitude(perpendicular)
+                
+                # Check if inside cone
+                if perp_distance <= cone_radius_at_d:
+                    item['projection'] = projection
+                    item['perp_distance'] = perp_distance
+                    item['cone_radius_at_d'] = cone_radius_at_d
+                    cone_filtered.append(item)
+            
+            if self.verbose:
+                print(f"[STAGE 3] Cone: {len(cone_filtered)} memories inside cone shape")
+            
+            # === STAGE 4: SCORE & SORT ===
+            for item in cone_filtered:
+                # 4-factor scoring
+                angular_score = item['alignment']
+                distance_score = 1.0 - (item['projection'] / cone_length)
+                axis_score = 1.0 - (item['perp_distance'] / item['cone_radius_at_d'])
+                
+                # Density score
+                node_memory_count = len(item['node'].get('stm_coord_keys', []))
+                density_score = node_memory_count / max(1, memory_density)
+                density_score = min(2.0, density_score)
+                
+                # Combined relevance
+                item['relevance'] = (
+                    0.30 * angular_score +
+                    0.25 * distance_score +
+                    0.20 * axis_score +
+                    0.25 * density_score
+                )
+            
+            # Sort by relevance
+            cone_filtered.sort(key=lambda x: x['relevance'], reverse=True)
+            
+            # Build results
+            memories = []
+            for item in cone_filtered[:max_memories]:
+                memory_entry = self._stm_api._stm.stm_entries.get(item['memory_coord_key'])
+                if memory_entry:
+                    memories.append({
+                        'coord_key': item['memory_coord_key'],
+                        'semantic_summary': memory_entry.get('semantic_summary', ''),
+                        'relevance_score': item['relevance'],
+                        'alignment': item['alignment'],
+                        'projection': item['projection'],
+                        'timestamp': memory_entry.get('timestamp', ''),
+                        'valence': memory_entry.get('valence', 0.0)
+                    })
+            
+            if self.verbose:
+                print(f"[STAGE 4] Returning {len(memories)} top-scored memories")
+            
+            return {
+                'success': True,
+                'cone_search_used': True,
+                'memories': memories,
+                'cone_stats': {
+                    'stage1_radial': memory_count,
+                    'stage2_direction': len(direction_filtered),
+                    'stage3_cone': len(cone_filtered),
+                    'final_returned': len(memories),
+                    'tightening_factor': tightening_factor,
+                    'cone_radius': cone_radius,
+                    'cone_taper': cone_taper,
+                    'cone_length': cone_length,
+                    'memory_density': memory_density
+                }
+            }
+        
+        # ============================================================
+        # RADIAL SEARCH MODE (Default)
+        # ============================================================
         
         # Get SCM node
         node = self.scm.get_node(structure_type, cluster_id, coordinates)
@@ -611,6 +809,50 @@ class AdvancedSemanticMemory:
             chunks.append(current_chunk + ".")
         
         return chunks
+    
+    # ========================================================================
+    # CONE SEARCH HELPER METHODS
+    # ========================================================================
+    
+    def _normalize_vector(self, vec):
+        """Normalize a 3D vector to unit length"""
+        import math
+        if isinstance(vec, dict):
+            vec = (vec.get('x', 0), vec.get('y', 0), vec.get('z', 0))
+        
+        mag = math.sqrt(vec[0]**2 + vec[1]**2 + vec[2]**2)
+        if mag < 1e-8:
+            return (0, 0, 1)  # Default to forward if zero vector
+        return (vec[0]/mag, vec[1]/mag, vec[2]/mag)
+    
+    def _magnitude(self, vec):
+        """Calculate magnitude of a 3D vector"""
+        import math
+        return math.sqrt(vec[0]**2 + vec[1]**2 + vec[2]**2)
+    
+    def _dot_product(self, vec1, vec2):
+        """Calculate dot product of two 3D vectors"""
+        return vec1[0]*vec2[0] + vec1[1]*vec2[1] + vec1[2]*vec2[2]
+    
+    def _subtract_vectors(self, vec1, vec2):
+        """Subtract two 3D vectors"""
+        return (vec1[0]-vec2[0], vec1[1]-vec2[1], vec1[2]-vec2[2])
+    
+    def _scale_vector(self, vec, scalar):
+        """Scale a 3D vector by a scalar"""
+        return (vec[0]*scalar, vec[1]*scalar, vec[2]*scalar)
+    
+    def _parse_coordinate_key(self, coord_key):
+        """Parse coordinate key string to list of floats"""
+        try:
+            # Format: '[0.45][-0.32][0.61]...'
+            parts = coord_key.strip('[]').split('][')
+            coords = [float(p) for p in parts]
+            if len(coords) >= 9:
+                return coords
+        except:
+            pass
+        return None
 
 
 # Convenience factory function
