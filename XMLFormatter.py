@@ -404,6 +404,30 @@ class XMLFormatter:
         
         return xml
     
+    def format_action_categories(self, action_categories: Dict[str, Dict[str, str]]) -> str:
+        """
+        Format categorized actions as XML structure for frame-based action system.
+        
+        Args:
+            action_categories: {"perception": {action_name: desc}, "movement": {action_name: desc}, ...}
+        
+        Returns:
+            XML with categorized actions
+        """
+        if not action_categories:
+            return "<action_categories/>"
+        
+        xml = "<action_categories>\n"
+        
+        for category_name, actions in action_categories.items():
+            xml += f'  <{category_name}>\n'
+            for action_name, action_desc in actions.items():
+                xml += f'    <action name="{action_name}">{self._escape_xml(action_desc)}</action>\n'
+            xml += f'  </{category_name}>\n'
+        
+        xml += "</action_categories>"
+        return xml
+    
     def format_objective_extraction(self, thought: str, instruction: str) -> str:
         """
         Format objective extraction prompt as XML.

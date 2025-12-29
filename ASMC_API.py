@@ -680,7 +680,7 @@ class AdvancedSemanticMemory:
                 'message': 'Must set confirm=True to clear memory (DESTRUCTIVE operation)'
             }
         
-        import os
+            import os
         import shutil
         
         cleared = {
@@ -969,11 +969,15 @@ def create_memory(max_entries: int = 50, db_path: str = None, verbose: bool = Fa
         
     Returns:
         AdvancedSemanticMemory: Initialized memory system
+    
+    Note:
+        SCM (Spatial Comprehension Map) is ALWAYS enabled - it's a core research feature.
     """
     return AdvancedSemanticMemory(
         max_stm_entries=max_entries,
         ltm_db_path=db_path,
-        verbose=verbose
+        verbose=verbose,
+        enable_scm=True  # ALWAYS enabled - SCM is core to spatial episodic memory research
     )
 
 
