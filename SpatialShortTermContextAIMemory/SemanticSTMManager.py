@@ -200,12 +200,19 @@ class SemanticSTMManager:
         Returns:
             Dict: Contains new memory + linked neighbor memories for enriched context
         """
-        # Create full conversation context
-        full_context = f"User: {user_input}\nAI: {ai_response}"
-        
+        # Create full conversation context with neutral labels
+        parts = [f"[Situation]\n{user_input}"]
+        if thought:
+            parts.append(f"[Thought]\n{thought}")
+        if objective:
+            parts.append(f"[Objective]\n{objective}")
+        if result:
+            parts.append(f"[Result]\n{result}")
+        full_context = "\n\n".join(parts)
+
         # Process with existing 9D coordinate system
         coord_result = self.coord_system.process(full_context)
-        
+
         # Create STM entry with separated cognitive stages + result
         stm_entry = {
             'coord_key': coord_result['coordinate_key'],

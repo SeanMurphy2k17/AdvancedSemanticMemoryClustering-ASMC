@@ -24,6 +24,7 @@ Copyright (c) 2024 Sean Murphy
 
 import os
 import sys
+import shutil
 
 # Add submodule paths
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -39,7 +40,7 @@ class AdvancedSemanticMemory:
     Unified interface for two-layer semantic memory system
     """
     
-    def __init__(self, max_stm_entries: int = 50, ltm_db_path: str = None, verbose: bool = False, enable_scm: bool = True):
+    def __init__(self, max_stm_entries: int = 50, ltm_db_path: str = None, verbose: bool = False, enable_scm: bool = True, defer_init: bool = False):
         """
         Initialize the Advanced Semantic Memory Clustering system
         
@@ -48,6 +49,7 @@ class AdvancedSemanticMemory:
             ltm_db_path: OPTIONAL custom LTM path (default: auto-managed in MemoryStructures/)
             verbose: Enable detailed logging (default: False)
             enable_scm: Enable Spatial Comprehension Map integration (default: True)
+            defer_init: If True, skip opening LTM/SCM (for clearing before use)
         """
         self.max_stm_entries = max_stm_entries
         self.verbose = verbose
@@ -69,17 +71,18 @@ class AdvancedSemanticMemory:
         os.makedirs(os.path.dirname(self.scm_path), exist_ok=True)
         
         # Initialize STM (which handles SVC and LTM internally)
+        # Skip LTM init if deferred (will be cleared before use)
         self._stm_api = create_stm_api(
             max_entries=max_stm_entries,
             save_interval=30,
             data_directory=self.stm_path,
-            ltm_db_path=self.ltm_db_path,
+            ltm_db_path=self.ltm_db_path if not defer_init else None,
             verbose=verbose
         )
         
         # Initialize SCM (Spatial Comprehension Map)
         self.scm = None
-        if enable_scm:
+        if enable_scm and not defer_init:
             self.scm = create_scm(db_path=self.scm_path, verbose=verbose)
         
         if verbose:
@@ -130,7 +133,14 @@ class AdvancedSemanticMemory:
         # Generate coordinate directly for SCM (bypass STM return issues)
         from spatial_valence import UltraEnhancedSpatialValenceToCoordGeneration
         coord_gen = UltraEnhancedSpatialValenceToCoordGeneration()
-        full_context = f"User: {situation}\nAI: {response}"
+        parts = [f"[Situation]\n{situation}"]
+        if thought:
+            parts.append(f"[Thought]\n{thought}")
+        if objective:
+            parts.append(f"[Objective]\n{objective}")
+        if result:
+            parts.append(f"[Result]\n{result}")
+        full_context = "\n\n".join(parts)
         coord_result = coord_gen.process(full_context)
         coord_key = coord_result.get('coordinate_key')
         print(f"[ASMC DEBUG] Generated coord_key: {coord_key}")
@@ -680,9 +690,6 @@ class AdvancedSemanticMemory:
                 'message': 'Must set confirm=True to clear memory (DESTRUCTIVE operation)'
             }
         
-            import os
-        import shutil
-        
         cleared = {
             'stm': False,
             'ltm': False,
@@ -713,7 +720,13 @@ class AdvancedSemanticMemory:
             
             # Close LTM connection first (via STM API)
             if hasattr(self._stm_api, '_ltm') and self._stm_api._ltm:
-                self._stm_api._ltm.close()
+                try:
+                    self._stm_api._ltm.close()
+                    # Give LMDB time to release file locks
+                    import time
+                    time.sleep(0.5)
+                except:
+                    pass
             
             # Delete LTM directory
             if os.path.exists(self.ltm_db_path):
@@ -958,7 +971,7 @@ class AdvancedSemanticMemory:
 
 
 # Convenience factory function
-def create_memory(max_entries: int = 50, db_path: str = None, verbose: bool = False):
+def create_memory(max_entries: int = 50, db_path: str = None, verbose: bool = False, defer_init: bool = False):
     """
     Quick factory function to create Advanced Semantic Memory system
     
@@ -966,6 +979,7 @@ def create_memory(max_entries: int = 50, db_path: str = None, verbose: bool = Fa
         max_entries: Maximum STM entries
         db_path: OPTIONAL custom LTM path (default: auto-managed in MemoryStructures/LTM/ltm.lmdb)
         verbose: Enable logging
+        defer_init: If True, skip opening LTM/SCM (for clearing before use)
         
     Returns:
         AdvancedSemanticMemory: Initialized memory system
@@ -977,7 +991,8 @@ def create_memory(max_entries: int = 50, db_path: str = None, verbose: bool = Fa
         max_stm_entries=max_entries,
         ltm_db_path=db_path,
         verbose=verbose,
-        enable_scm=True  # ALWAYS enabled - SCM is core to spatial episodic memory research
+        enable_scm=True,  # ALWAYS enabled - SCM is core to spatial episodic memory research
+        defer_init=defer_init
     )
 
 
