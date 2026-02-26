@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.pyo
+
+MemoryStructures/LTM/
+MemoryStructures/STM/
+MemoryStructures/SCM/scm.lmdb/
+MemoryStructures/SCM/scm_operations.log

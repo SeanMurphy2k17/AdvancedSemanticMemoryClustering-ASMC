@@ -231,7 +231,8 @@ class SemanticSTM_API:
                     "user_message": entry['user_input'],
                     "ai_response": entry['ai_response'],
                     "semantic_summary": entry['semantic_summary'],
-                    "timestamp": entry['timestamp']
+                    "timestamp": entry['timestamp'],
+                    "metadata": entry.get('metadata', {})
                 })
             
             formatted_relevant = []
@@ -240,7 +241,8 @@ class SemanticSTM_API:
                     "user_message": entry['user_input'],
                     "ai_response": entry['ai_response'],
                     "semantic_summary": entry['semantic_summary'],
-                    "timestamp": entry['timestamp']
+                    "timestamp": entry['timestamp'],
+                    "metadata": entry.get('metadata', {})
                 })
             
             # Format LAYER 2: Semantic depth (LTM)
