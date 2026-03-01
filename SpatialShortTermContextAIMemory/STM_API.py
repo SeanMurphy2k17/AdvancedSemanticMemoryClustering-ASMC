@@ -200,10 +200,11 @@ class SemanticSTM_API:
                 "search_timestamp": time.time()
             }
     
-    def get_context(self, 
+    def get_context(self,
                    user_input: str,
                    recent_count: int = 3,
-                   relevant_count: int = 5) -> Dict:
+                   relevant_count: int = 5,
+                   complexity: int = 5) -> Dict:
         """
         Build enhanced context for conversation
         
@@ -220,8 +221,9 @@ class SemanticSTM_API:
                 user_input=user_input,
                 recent_count=recent_count,
                 relevant_count=relevant_count,
-                ltm_semantic=3,  # Layer 2A
-                ltm_neighbors=3  # Layer 2B
+                ltm_semantic=3,
+                ltm_neighbors=3,
+                complexity=complexity
             )
             
             # Format LAYER 1: Immediate context (STM)

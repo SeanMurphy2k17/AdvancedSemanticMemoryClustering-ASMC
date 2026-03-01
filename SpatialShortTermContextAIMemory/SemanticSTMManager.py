@@ -359,8 +359,8 @@ class SemanticSTMManager:
         
         return recent_entries
     
-    def build_enhanced_context(self, user_input: str, recent_count: int = 3, 
-                             relevant_count: int = 3, ltm_semantic: int = 3, ltm_neighbors: int = 3) -> Dict:
+    def build_enhanced_context(self, user_input: str, recent_count: int = 3,
+                             relevant_count: int = 3, ltm_semantic: int = 3, ltm_neighbors: int = 3, complexity: int = 5) -> Dict:
         """
         Build TWO-LAYER enhanced context: Layer 1 (STM immediate) + Layer 2 (LTM depth)
         
@@ -400,14 +400,21 @@ class SemanticSTMManager:
                 pass
             
             # Layer 2B: Spatial neighbors (what's CONNECTED in 9D space)
+            # Growing radius search — expands by 1.2x each step up to complexity iterations
             try:
                 query_coords = self.coord_system.process(user_input)['coordinates']
-                neighbor_results = self.engram_manager.find_spatial_neighbors(
-                    coordinates=query_coords,
-                    radius=0.5,
-                    max_results=ltm_neighbors,
-                    query_text=user_input  # Pass query for relevance scoring
-                )
+                radius = 0.5
+                neighbor_results = []
+                for _ in range(max(1, complexity)):
+                    neighbor_results = self.engram_manager.find_spatial_neighbors(
+                        coordinates=query_coords,
+                        radius=radius,
+                        max_results=ltm_neighbors,
+                        query_text=user_input
+                    )
+                    if neighbor_results:
+                        break
+                    radius *= 1.2
                 ltm_spatial_neighbors = neighbor_results
             except:
                 pass

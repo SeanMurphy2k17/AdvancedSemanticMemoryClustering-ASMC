@@ -226,7 +226,7 @@ class AdvancedSemanticMemory:
             'scm_valence': coord_result.get('scm_valence')
         }
     
-    def get_context(self, query: str, layer1_count: int = 6, layer2_count: int = 6):
+    def get_context(self, query: str, layer1_count: int = 6, layer2_count: int = 6, complexity: int = 5):
         """
         Get two-layer context for a query
         
@@ -248,7 +248,8 @@ class AdvancedSemanticMemory:
         return self._stm_api.get_context(
             user_input=query,
             recent_count=recent_count,
-            relevant_count=relevant_count
+            relevant_count=relevant_count,
+            complexity=complexity
         )
     
     def get_statistics(self):
