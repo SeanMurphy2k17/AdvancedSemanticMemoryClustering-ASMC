@@ -226,6 +226,17 @@ class AdvancedSemanticMemory:
             'scm_valence': coord_result.get('scm_valence')
         }
     
+    def get_recent_action_chain(self, n: int = 3) -> list:
+        """Return last n (thought, action) pairs from STM for action model history."""
+        try:
+            order = list(self._stm_api._stm.entry_order)
+            entries = self._stm_api._stm.stm_entries
+            recent_keys = order[-n:] if len(order) >= n else order
+            return [(entries[k].get('thought', ''), entries[k].get('action', ''))
+                    for k in recent_keys if k in entries and entries[k].get('thought') and entries[k].get('action')]
+        except Exception:
+            return []
+
     def get_context(self, query: str, layer1_count: int = 6, layer2_count: int = 6, complexity: int = 5):
         """
         Get two-layer context for a query
