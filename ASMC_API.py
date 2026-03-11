@@ -226,40 +226,7 @@ class AdvancedSemanticMemory:
             'scm_valence': coord_result.get('scm_valence')
         }
     
-    def get_recent_action_chain(self, n: int = 3) -> list:
-        """Return last n (thought, action) pairs from STM for action model history."""
-        try:
-            order = list(self._stm_api._stm.entry_order)
-            entries = self._stm_api._stm.stm_entries
-            recent_keys = order[-n:] if len(order) >= n else order
-            return [(entries[k].get('thought', ''), entries[k].get('action', ''))
-                    for k in recent_keys if k in entries and entries[k].get('thought') and entries[k].get('action')]
-        except Exception:
-            return []
-
-    def get_recent_volitive_chain(self, n: int = 5) -> list:
-        """Return last n volitive decisions from STM filtered by platform tag."""
-        try:
-            import ast
-            order = list(self._stm_api._stm.entry_order)
-            entries = self._stm_api._stm.stm_entries
-            volitive = [k for k in order if entries.get(k, {}).get('metadata', {}).get('platform') == 'volitive']
-            recent = volitive[-n:] if len(volitive) >= n else volitive
-            result = []
-            for k in recent:
-                e = entries[k]
-                parsed = ast.literal_eval(e.get('action', '{}')) if e.get('action') else {}
-                result.append({
-                    'thought': e.get('thought', ''),
-                    'complexity': parsed.get('complexity', '5'),
-                    'mode': parsed.get('mode', 'fast'),
-                    'direction': parsed.get('volitiondirection', 'operate'),
-                })
-            return result
-        except Exception:
-            return []
-
-    def get_context(self, query: str, layer1_count: int = 6, layer2_count: int = 6, complexity: int = 5):
+    def get_context(self, query: str, layer1_count: int = 6, layer2_count: int = 6, **kwargs):
         """
         Get two-layer context for a query
         
@@ -281,8 +248,7 @@ class AdvancedSemanticMemory:
         return self._stm_api.get_context(
             user_input=query,
             recent_count=recent_count,
-            relevant_count=relevant_count,
-            complexity=complexity
+            relevant_count=relevant_count
         )
     
     def get_statistics(self):
