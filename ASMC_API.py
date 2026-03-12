@@ -226,11 +226,13 @@ class AdvancedSemanticMemory:
             'scm_valence': coord_result.get('scm_valence')
         }
     
-    def get_recent_action_chain(self, n: int = 3) -> list:
-        """Return last n (thought, action) pairs from STM for action model history."""
+    def get_recent_action_chain(self, n: int = 3, platform: str = None) -> list:
+        """Return last n (thought, action) pairs from STM, optionally filtered by platform."""
         try:
             order = list(self._stm_api._stm.entry_order)
             entries = self._stm_api._stm.stm_entries
+            if platform:
+                order = [k for k in order if entries.get(k, {}).get('metadata', {}).get('platform') == platform]
             recent_keys = order[-n:] if len(order) >= n else order
             return [(entries[k].get('thought', ''), entries[k].get('action', ''))
                     for k in recent_keys if k in entries and entries[k].get('thought') and entries[k].get('action')]
