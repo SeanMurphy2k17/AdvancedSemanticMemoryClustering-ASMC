@@ -46,7 +46,7 @@ import sys
 import os
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(parent_dir, 'SpatialValienceToCoords'))
-from spatial_valence import UltraEnhancedSpatialValenceToCoordGeneration, SemanticDepth
+from spatial_valence import EnhancedSpatialValenceToCoordGeneration, SemanticDepth
 
 # Import LTM storage manager (but NOT its coordinate generator)
 sys.path.insert(0, os.path.join(parent_dir, 'LoingTermSpatialMemory'))
@@ -92,7 +92,7 @@ class SemanticSTMManager:
         self.current_save_target = 'A'  # Alternates between A and B
         
         # INTEGRATION: REAL Spatial Valence library with DEEP mode for maximum consistency
-        self.coord_system = UltraEnhancedSpatialValenceToCoordGeneration(SemanticDepth.DEEP)
+        self.coord_system = EnhancedSpatialValenceToCoordGeneration(SemanticDepth.DEEP)
         self.engram_manager = None  # Lazy load to avoid circular imports
         
         # STATISTICS
@@ -219,6 +219,7 @@ class SemanticSTMManager:
             'coordinates': coord_result['coordinates'],
             'semantic_summary': coord_result['summary'],
             'semantic_keys': coord_result['semantic_keys'],
+            'sentiment_polarity': coord_result.get('enhanced_analysis', {}).get('sentiment.polarity', 0.0),
             'full_context': full_context,
             'user_input': user_input,
             'ai_response': ai_response,
@@ -387,22 +388,25 @@ class SemanticSTMManager:
         ltm_semantic_matches = []
         ltm_spatial_neighbors = []
         
-        # Initialize EngramManager if needed (lazy load for queries)
+        # Initialize EngramManager if needed (lazy load for queries), sharing STM coord_system
         if self.engram_manager is None and self.ltm_db_path:
-            self.engram_manager = EngramManager(db_path=self.ltm_db_path, verbose=False)
+            self.engram_manager = EngramManager(db_path=self.ltm_db_path, verbose=False, coord_system=self.coord_system)
         
         if self.engram_manager:
+            # STM owns coord generation — process once, pass result to LTM
+            query_result = self.coord_system.process(user_input)
+            query_coords = query_result['coordinates']
+
             # Layer 2A: Semantic matches (what this MEANS)
             try:
-                semantic_results = self.engram_manager.search_similar(user_input, max_results=ltm_semantic)
-                ltm_semantic_matches = semantic_results
+                ltm_semantic_matches = self.engram_manager.search_similar(
+                    user_input, max_results=ltm_semantic, query_result=query_result)
             except:
                 pass
             
             # Layer 2B: Spatial neighbors (what's CONNECTED in 9D space)
             # Growing radius search — expands by 1.2x each step up to complexity iterations
             try:
-                query_coords = self.coord_system.process(user_input)['coordinates']
                 radius = 0.5
                 neighbor_results = []
                 for _ in range(max(1, complexity)):
@@ -410,7 +414,7 @@ class SemanticSTMManager:
                         coordinates=query_coords,
                         radius=radius,
                         max_results=ltm_neighbors,
-                        query_text=user_input
+                        query_result=query_result
                     )
                     if neighbor_results:
                         break
@@ -425,7 +429,7 @@ class SemanticSTMManager:
             'ltm_semantic': ltm_semantic_matches,
             'ltm_neighbors': ltm_spatial_neighbors,
             'total_context_entries': len(recent_context) + len(relevant_context) + len(ltm_semantic_matches) + len(ltm_spatial_neighbors),
-            'query_summary': self.coord_system.process(user_input)['summary']
+            'query_summary': query_result['summary'] if self.engram_manager else self.coord_system.process(user_input)['summary']
         }
     
     def _promote_oldest_to_longterm(self):
@@ -433,15 +437,15 @@ class SemanticSTMManager:
         if not self.entry_order:
             return
         
-        # Initialize EngramManager if needed (lazy loading)
+        # Initialize EngramManager if needed (lazy loading), sharing STM coord_system
         if self.engram_manager is None:
-            self.engram_manager = EngramManager(db_path=self.ltm_db_path, verbose=False)
+            self.engram_manager = EngramManager(db_path=self.ltm_db_path, verbose=False, coord_system=self.coord_system)
         
         # Get oldest entry
         oldest_key = self.entry_order.pop(0)
         oldest_entry = self.stm_entries.pop(oldest_key)
         
-        # Promote to long-term spatial memory
+        # Promote to long-term spatial memory using STM's already-computed coords
         try:
             memory_id = self.engram_manager.store_memory(
                 text=oldest_entry['full_context'],
@@ -452,6 +456,13 @@ class SemanticSTMManager:
                     'user_input': oldest_entry['user_input'],
                     'ai_response': oldest_entry['ai_response'],
                     'semantic_summary': oldest_entry['semantic_summary']
+                },
+                coord_result={
+                    'coordinate_key': oldest_entry['coord_key'],
+                    'coordinates': oldest_entry['coordinates'],
+                    'summary': oldest_entry['semantic_summary'],
+                    'semantic_keys': oldest_entry['semantic_keys'],
+                    'processing_time': 0.0
                 }
             )
             

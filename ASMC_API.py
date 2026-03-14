@@ -130,23 +130,6 @@ class AdvancedSemanticMemory:
         Returns:
             Dict: Storage result with coordinate information
         """
-        # Generate coordinate directly for SCM (bypass STM return issues)
-        from spatial_valence import UltraEnhancedSpatialValenceToCoordGeneration
-        coord_gen = UltraEnhancedSpatialValenceToCoordGeneration()
-        parts = [f"[Situation]\n{situation}"]
-        if thought:
-            parts.append(f"[Thought]\n{thought}")
-        if objective:
-            parts.append(f"[Objective]\n{objective}")
-        if result:
-            parts.append(f"[Result]\n{result}")
-        full_context = "\n\n".join(parts)
-        coord_result = coord_gen.process(full_context)
-        coord_key = coord_result.get('coordinate_key')
-        print(f"[ASMC DEBUG] Generated coord_key: {coord_key}")
-        print(f"[ASMC DEBUG] spatial_anchor present: {spatial_anchor is not None}")
-        
-        # Still store in STM (let it do its internal thing)
         stm_result = self._stm_api.add_conversation(
             user_message=situation,
             ai_response=response,
@@ -156,6 +139,9 @@ class AdvancedSemanticMemory:
             result=result,
             metadata=metadata
         )
+        coord_key = stm_result.get('coordinate_key')
+        scm_node_key = None
+        scm_valence = None
         # SCM Integration: If spatial anchor provided, link memory to location
         if self.scm and spatial_anchor and coord_key:
             try:
@@ -208,54 +194,32 @@ class AdvancedSemanticMemory:
                     "entities": str(entities)
                 })
                 
-                # Add SCM info to coord_result
-                coord_result['scm_node_key'] = node_key
-                coord_result['scm_valence'] = valence
+                scm_node_key = node_key
+                scm_valence = valence
                 
             except Exception as e:
                 if self.verbose:
                     print(f"   [ASMC] Warning: SCM linking failed: {e}")
         
-        # Return our coordinate result
         return {
             'success': True,
             'coordinate_key': coord_key,
-            'coordinates': coord_result.get('coordinates'),
-            'summary': coord_result.get('summary'),
-            'scm_node_key': coord_result.get('scm_node_key'),
-            'scm_valence': coord_result.get('scm_valence')
+            'coordinates': stm_result.get('coordinates'),
+            'summary': stm_result.get('semantic_summary'),
+            'scm_node_key': scm_node_key,
+            'scm_valence': scm_valence
         }
     
-    def get_recent_action_chain(self, n: int = 3) -> list:
-        """Return last n (thought, action) pairs from STM for action model history."""
+    def get_raw_entries(self, n: int = None, metadata_filter: dict = None) -> list:
+        """Return raw STM entries, optionally filtered by metadata key-value pairs."""
         try:
             order = list(self._stm_api._stm.entry_order)
             entries = self._stm_api._stm.stm_entries
-            recent_keys = order[-n:] if len(order) >= n else order
-            return [(entries[k].get('thought', ''), entries[k].get('action', ''))
-                    for k in recent_keys if k in entries and entries[k].get('thought') and entries[k].get('action')]
-        except Exception:
-            return []
-
-    def get_recent_volitive_chain(self, n: int = 5) -> list:
-        """Return last n volitive decisions from STM filtered by platform tag."""
-        try:
-            import ast
-            order = list(self._stm_api._stm.entry_order)
-            entries = self._stm_api._stm.stm_entries
-            volitive = [k for k in order if entries.get(k, {}).get('metadata', {}).get('platform') == 'volitive']
-            recent = volitive[-n:] if len(volitive) >= n else volitive
-            result = []
-            for k in recent:
-                e = entries[k]
-                parsed = ast.literal_eval(e.get('action', '{}')) if e.get('action') else {}
-                result.append({
-                    'thought': e.get('thought', ''),
-                    'complexity': parsed.get('complexity', '5'),
-                    'mode': parsed.get('mode', 'fast'),
-                    'direction': parsed.get('volitiondirection', 'operate'),
-                })
-            return result
+            if metadata_filter:
+                order = [k for k in order if all(entries.get(k, {}).get('metadata', {}).get(fk) == fv for fk, fv in metadata_filter.items())]
+            if n:
+                order = order[-n:] if len(order) >= n else order
+            return [entries[k] for k in order if k in entries]
         except Exception:
             return []
 
@@ -282,6 +246,7 @@ class AdvancedSemanticMemory:
             user_input=query,
             recent_count=recent_count,
             relevant_count=relevant_count,
+            layer2_count=layer2_count,
             complexity=complexity
         )
     
@@ -314,25 +279,12 @@ class AdvancedSemanticMemory:
             if not stm_entry:
                 return 0.0
             
-            # Check if coordinate result has fingerprint with sentiment
-            # (ASMC already computed this during coordinate generation)
-            coord_result = stm_entry.get('coord_result', {})
+            # Read SentiWordNet polarity stored at write time
+            polarity = stm_entry.get('sentiment_polarity')
+            if polarity is not None:
+                return float(polarity)
             
-            # Try to extract from fingerprint (if available)
-            if 'fingerprint' in coord_result:
-                fingerprint = coord_result['fingerprint']
-                if hasattr(fingerprint, 'semantic_features'):
-                    sentiment = fingerprint.semantic_features.get('sentiment', {})
-                    if sentiment:
-                        pos_score = sentiment.get('positive', 0.0)
-                        neg_score = sentiment.get('negative', 0.0)
-                        
-                        # Convert to -1 to +1 scale
-                        if pos_score + neg_score > 0:
-                            valence = (pos_score - neg_score) / (pos_score + neg_score)
-                            return valence
-            
-            # Fallback: Analyze response text directly (simpler heuristic)
+            # Fallback: keyword heuristic if entry predates sentiment_polarity field
             response = stm_entry.get('ai_response', '')
             return self._simple_valence_extraction(response)
             
@@ -418,10 +370,8 @@ class AdvancedSemanticMemory:
                 print(f"\n[CONE SEARCH] Initiating semantic cone search")
                 print(f"[CONE SEARCH] Query: {query_text}")
             
-            # Generate query's semantic coordinate
-            from spatial_valence import UltraEnhancedSpatialValenceToCoordGeneration
-            coord_gen = UltraEnhancedSpatialValenceToCoordGeneration()
-            query_result = coord_gen.process(query_text)
+            # Generate query's semantic coordinate using shared STM coord system
+            query_result = self._stm_api._stm.coord_system.process(query_text)
             query_coords = query_result['coordinates']
             
             # Extract semantic parameters (9D → 3x3D)
@@ -612,12 +562,20 @@ class AdvancedSemanticMemory:
             "valence": f"{node.get('aggregate_valence', 0.0):.3f}"
         })
         
-        # Fetch recent STM memories
+        # Fetch recent STM memories (with LTM fallback for promoted entries)
         stm_memories = []
+        axes = ['x', 'y', 'z', 'a', 'b', 'c', 'd', 'e', 'f']
+        engram = self._stm_api._stm.engram_manager
         for coord_key in node.get('stm_coord_keys', [])[-max_memories:]:
             entry = self._stm_api._stm.stm_entries.get(coord_key)
+            if not entry and engram:
+                coords_list = self._parse_coordinate_key(coord_key)
+                if coords_list:
+                    ltm = engram.retrieve_by_coordinates(dict(zip(axes, coords_list)))
+                    if ltm:
+                        entry = {'full_context': ltm.get('input_text', ''),
+                                 'timestamp': ltm.get('timestamp', ''), 'valence': 0.0}
             if entry:
-                # Return full_context - complete interaction cycle with causation chain
                 stm_memories.append({
                     'coord_key': coord_key,
                     'full_context': entry.get('full_context', ''),

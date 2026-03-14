@@ -119,7 +119,7 @@ class SemanticSTM_API:
             Dict: Response with coordinate key and semantic summary
         """
         try:
-            coord_key = self._stm.add_conversation_exchange(
+            result_dict = self._stm.add_conversation_exchange(
                 user_input=user_message,
                 ai_response=ai_response,
                 thought=thought,
@@ -128,6 +128,7 @@ class SemanticSTM_API:
                 result=result,
                 metadata=metadata
             )
+            coord_key = result_dict['coord_key']
             
             # Get the stored entry for response
             entry = self._stm.stm_entries.get(coord_key)
@@ -204,6 +205,7 @@ class SemanticSTM_API:
                    user_input: str,
                    recent_count: int = 3,
                    relevant_count: int = 5,
+                   layer2_count: int = 6,
                    complexity: int = 5) -> Dict:
         """
         Build enhanced context for conversation
@@ -217,12 +219,14 @@ class SemanticSTM_API:
             Dict: Enhanced context with recent and relevant conversations
         """
         try:
+            ltm_semantic = layer2_count // 2
+            ltm_neighbors = layer2_count - ltm_semantic
             context = self._stm.build_enhanced_context(
                 user_input=user_input,
                 recent_count=recent_count,
                 relevant_count=relevant_count,
-                ltm_semantic=3,
-                ltm_neighbors=3,
+                ltm_semantic=ltm_semantic,
+                ltm_neighbors=ltm_neighbors,
                 complexity=complexity
             )
             

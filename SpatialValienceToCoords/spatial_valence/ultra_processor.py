@@ -105,31 +105,6 @@ class SemanticKnowledgeBase:
             }
         }
         
-        # Pre-computed word vectors (simplified embeddings)
-        self._build_word_vectors()
-    
-    def _build_word_vectors(self):
-        """Build simplified word embeddings"""
-        self.word_vectors = {}
-        
-        # Base vectors for concept anchors
-        base_vectors = {
-            'love': np.array([1.0, 0.8, 0.0, 0.9, 0.0]),
-            'hate': np.array([-1.0, -0.8, 0.0, -0.9, 0.0]),
-            'time': np.array([0.0, 0.0, 1.0, 0.0, 0.0]),
-            'space': np.array([0.0, 0.0, 0.0, 1.0, 0.0]),
-            'certainty': np.array([0.0, 0.0, 0.0, 0.0, 1.0])
-        }
-        
-        # Generate vectors for all known words
-        for word in self.word_to_concept:
-            concept = self.word_to_concept[word]
-            if concept in base_vectors:
-                # Add small random perturbation for variety
-                self.word_vectors[word] = base_vectors[concept] + np.random.normal(0, 0.1, 5)
-            else:
-                # Random vector for unknown concepts
-                self.word_vectors[word] = np.random.normal(0, 0.5, 5)
     
     def get_concept(self, word: str) -> str:
         """Get concept for a word"""
@@ -145,15 +120,9 @@ class SemanticKnowledgeBase:
         return self.antonyms.get(word.lower())
     
     def get_word_vector(self, word: str) -> np.ndarray:
-        """Get word embedding vector"""
-        word_lower = word.lower()
-        if word_lower in self.word_vectors:
-            return self.word_vectors[word_lower]
-        
-        # Generate vector for unknown word based on character features
-        char_hash = hashlib.md5(word_lower.encode()).digest()
-        vector = np.array([b / 255.0 * 2 - 1 for b in char_hash[:5]])
-        return vector
+        """Get deterministic word embedding vector from character hash"""
+        char_hash = hashlib.md5(word.lower().encode()).digest()
+        return np.array([b / 255.0 * 2 - 1 for b in char_hash[:5]])
 
 class UltraLexicalAnalyzer:
     """Ultra-aggressive lexical analysis"""
@@ -1676,9 +1645,9 @@ class UltraRobustSemanticEncoder:
 
 
 # API Compatibility wrapper
-class UltraEnhancedSpatialValenceToCoordGeneration:
+class EnhancedSpatialValenceToCoordGeneration:
     """
-    Ultra-enhanced wrapper maintaining API compatibility
+    Enhanced spatial valence wrapper maintaining API compatibility
     """
     
     def __init__(self, depth: SemanticDepth = SemanticDepth.DEEP):

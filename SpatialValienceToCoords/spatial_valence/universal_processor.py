@@ -12,7 +12,7 @@ from typing import Dict, Any, Optional, List
 from enum import Enum
 
 # Use local imports for the package
-from .ultra_processor import UltraEnhancedSpatialValenceToCoordGeneration
+from .ultra_processor import EnhancedSpatialValenceToCoordGeneration
 from .semantic_depth import SemanticDepth
 
 class ProcessingMode(Enum):
@@ -51,7 +51,7 @@ class UniversalSpatialProcessor:
         self.verbose = verbose
         
         # Initialize ULTRA processor
-        self.processor = UltraEnhancedSpatialValenceToCoordGeneration(default_depth)
+        self.processor = EnhancedSpatialValenceToCoordGeneration(default_depth)
         
         # Statistics
         self.stats = {

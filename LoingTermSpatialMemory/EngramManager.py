@@ -22,7 +22,7 @@ from typing import Dict, List, Optional
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'SpatialValienceToCoords'))
-from spatial_valence import UltraEnhancedSpatialValenceToCoordGeneration, SemanticDepth
+from spatial_valence import EnhancedSpatialValenceToCoordGeneration, SemanticDepth
 
 # Import LTM-specific components (absolute imports - these libraries are always together)
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -45,7 +45,8 @@ class EngramManager:
                  db_path="DigitalEngramEdgeV2/CoreData.lmdb",
                  enable_linking=True,
                  turbo_mode=True,
-                 verbose=True):
+                 verbose=True,
+                 coord_system=None):
         """Initialize the clean Engram Manager"""
         
         if verbose:
@@ -54,8 +55,8 @@ class EngramManager:
             print("🧠" * 30)
             print("🚀 Loading LEAN components with DEEP semantic analysis...")
         
-        # Initialize REAL coordinate generation system with DEEP mode
-        self.coord_system = UltraEnhancedSpatialValenceToCoordGeneration(SemanticDepth.DEEP)
+        # Use shared coord_system from STM if provided, otherwise create own instance
+        self.coord_system = coord_system or EnhancedSpatialValenceToCoordGeneration(SemanticDepth.DEEP)
         if verbose:
             print("✅ [1/3] Enhanced coordinate system ready with DEEP mode (Maximum consistency!)")
         
@@ -119,20 +120,21 @@ class EngramManager:
                 print("🚀 SPEED MODE: Minimal logging for bulk processing")
             print("🧠" * 30)
     
-    def store_memory(self, text: str, metadata: Optional[Dict] = None) -> Optional[int]:
+    def store_memory(self, text: str, metadata: Optional[Dict] = None, coord_result: Optional[Dict] = None) -> Optional[int]:
         """
         Store text in spatial memory system
         
         Args:
             text: Input text to store
             metadata: Optional metadata dictionary
+            coord_result: Optional pre-computed coord result (skips coord_system.process())
             
         Returns:
             int: Memory ID if successful, None if failed
         """
         try:
-            # Process text through coordinate system
-            result = self.coord_system.process(text)
+            # Use pre-computed coords if provided (e.g. from STM promotion), else generate
+            result = coord_result if coord_result is not None else self.coord_system.process(text)
             
             # Prepare storage data
             storage_data = {
@@ -155,7 +157,7 @@ class EngramManager:
             embedded_links = {'succession_links': [], 'radial_links': [], 'total_links': 0}
             
             if self.enable_linking:
-                embedded_links = self._create_turbo_links(memory_id, result['coordinates'], text)
+                embedded_links = self._create_turbo_links(memory_id, result['coordinates'], text, result.get('semantic_keys', []))
                 storage_data['semantic_links'] = embedded_links
             
             # Store in database WITH embedded links (single write)
@@ -215,7 +217,7 @@ class EngramManager:
             if result:
                 self.total_retrieved += 1
                 if self.verbose:
-                    coord_key = self.coord_system.generate_coordinate_key(coordinates)
+                    coord_key = result.get('metadata', {}).get('coordinate_key', str(coordinates))
                     print(f"🔍 Retrieved memory: {coord_key}")
             
             return result
@@ -346,7 +348,7 @@ class EngramManager:
         
         return confident + serendipity
     
-    def search_similar(self, query_text: str, max_results: int = 5, traverse_links: bool = True) -> List[Dict]:
+    def search_similar(self, query_text: str, max_results: int = 5, traverse_links: bool = True, query_result: dict = None) -> List[Dict]:
         """
         Search for similar memories using coordinate-based search WITH link traversal
         
@@ -359,8 +361,8 @@ class EngramManager:
             List[Dict]: Filtered and scored memories with linked neighbors
         """
         try:
-            # Process query to get coordinates and semantic data
-            query_result = self.coord_system.process(query_text)
+            # Use pre-computed result from STM if provided, else generate here
+            query_result = query_result or self.coord_system.process(query_text)
             query_coords = query_result['coordinates']
             
             if self.verbose:
@@ -527,7 +529,7 @@ class EngramManager:
     
     def find_spatial_neighbors(self, coordinates: Dict[str, float], 
                               radius: float = 0.5, max_results: int = 10,
-                              query_text: str = None) -> List[Dict]:
+                              query_text: str = None, query_result: dict = None) -> List[Dict]:
         """
         Find memories within spatial radius WITH relevance filtering
         
@@ -555,10 +557,10 @@ class EngramManager:
             if self.verbose and raw_results:
                 print(f"   📦 Raw neighbors: {len(raw_results)} memories")
             
-            # Apply relevance filtering if query text provided
-            if query_text:
-                query_result = self.coord_system.process(query_text)
-                filtered_results = self._filter_by_relevance(raw_results, query_result)
+            # Apply relevance filtering if query data provided (pre-computed from STM preferred)
+            resolved_query = query_result or (self.coord_system.process(query_text) if query_text else None)
+            if resolved_query:
+                filtered_results = self._filter_by_relevance(raw_results, resolved_query)
             else:
                 # No query text - use spatial distance only
                 # Still score them, but only by distance
@@ -640,8 +642,8 @@ class EngramManager:
             target_memory = self.semantic_linker.get_memory_by_id(link['target_id'])
             
             if target_memory:
-                # Create coordinate key for the linked memory
-                target_coord_key = self.coord_system.generate_coordinate_key(target_memory['coordinates'])
+                # Read stored STM coord_key — no generation
+                target_coord_key = target_memory.get('metadata', {}).get('coordinate_key', '')
                 
                 # Generate summary title from target memory content
                 target_content = target_memory.get('content', '')
@@ -665,7 +667,7 @@ class EngramManager:
         
         return embedded_links
     
-    def _create_turbo_links(self, memory_id: int, coordinates: Dict[str, float], content: str) -> Dict:
+    def _create_turbo_links(self, memory_id: int, coordinates: Dict[str, float], content: str, semantic_keys: list = None) -> Dict:
         """
         🚀 TURBO LINKING: Create links using RAM cache for maximum speed
         
@@ -741,8 +743,35 @@ class EngramManager:
             
             embedded_links['radial_links'].append(radial_link)
         
+        # SEMANTIC LINKS: Rebuild STM micro-clusters in LTM via concept overlap
+        if semantic_keys:
+            semantic_keys_set = set(semantic_keys)
+            semantic_candidates = []
+            for cached in self.memory_cache[:-1]:
+                cached_keys = set(cached.get('storage_data', {}).get('semantic_keys', []))
+                overlap = len(semantic_keys_set & cached_keys)
+                if overlap >= 2:
+                    semantic_candidates.append({
+                        'memory': cached,
+                        'overlap': overlap,
+                        'strength': min(1.0, overlap / max(len(semantic_keys_set), 1))
+                    })
+            semantic_candidates.sort(key=lambda x: x['overlap'], reverse=True)
+            for candidate in semantic_candidates[:3]:
+                m = candidate['memory']
+                embedded_links.setdefault('semantic_links', []).append({
+                    'target_memory_id': m['id'],
+                    'target_coordinate_key': m['coord_key'],
+                    'target_coordinates': m['coordinates'],
+                    'summary': m['content'][:100] + "...",
+                    'link_type': 'semantic',
+                    'strength': round(candidate['strength'], 3),
+                    'overlap_count': candidate['overlap']
+                })
+
         # Update total count
-        embedded_links['total_links'] = len(embedded_links['succession_links']) + len(embedded_links['radial_links'])
+        semantic_count = len(embedded_links.get('semantic_links', []))
+        embedded_links['total_links'] = len(embedded_links['succession_links']) + len(embedded_links['radial_links']) + semantic_count
         
         # TURBO: Update link statistics
         self.turbo_stats['succession_links'] += len(embedded_links['succession_links'])
@@ -786,7 +815,7 @@ class EngramManager:
                 # Create backward link
                 backward_link = {
                     'target_memory_id': new_memory_id,
-                    'target_coordinate_key': self.coord_system.generate_coordinate_key(self._get_last_coordinates()),
+                    'target_coordinate_key': self.memory_cache[-1].get('coord_key', '') if self.memory_cache else '',
                     'target_coordinates': self._get_last_coordinates(),
                     'summary': self._get_last_content()[:100] + "...",
                     'link_type': link['link_type'],
@@ -905,8 +934,8 @@ class EngramManager:
                     target_memory = self.semantic_linker.get_memory_by_id(link['target_id'])
                     
                     if target_memory:
-                        # Create coordinate key for the linked memory
-                        target_coord_key = self.coord_system.generate_coordinate_key(target_memory['coordinates'])
+                        # Read stored STM coord_key — no generation
+                        target_coord_key = target_memory.get('metadata', {}).get('coordinate_key', '')
                         
                         # Generate summary title from target memory content
                         target_content = target_memory.get('content', '')
@@ -997,7 +1026,7 @@ class EngramManager:
                         new_memory_data = self.semantic_linker.get_memory_by_id(new_memory_id)
                         
                         if new_memory_data:
-                            new_coord_key = self.coord_system.generate_coordinate_key(new_memory_data['coordinates'])
+                            new_coord_key = new_memory_data.get('metadata', {}).get('coordinate_key', '')
                             
                             # Create backward link
                             backward_link = {

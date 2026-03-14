@@ -384,10 +384,10 @@ if __name__ == "__main__":
     import sys
     import os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'SpatialValienceToCoords'))
-    from spatial_valence import UltraEnhancedSpatialValenceToCoordGeneration, SemanticDepth
+    from spatial_valence import EnhancedSpatialValenceToCoordGeneration, SemanticDepth
     
     # Initialize systems with DEEP mode for maximum consistency
-    coord_processor = UltraEnhancedSpatialValenceToCoordGeneration(SemanticDepth.DEEP)
+    coord_processor = EnhancedSpatialValenceToCoordGeneration(SemanticDepth.DEEP)
     linker = SemanticLinking_Manager_V2(verbose=True)
     
     # Test memories

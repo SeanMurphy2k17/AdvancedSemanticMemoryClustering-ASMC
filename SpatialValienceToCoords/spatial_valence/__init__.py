@@ -25,24 +25,22 @@ Example Usage:
 from .semantic_depth import SemanticDepth
 
 # Import ULTRA processor as the core implementation
-from .ultra_processor import UltraEnhancedSpatialValenceToCoordGeneration, UltraRobustSemanticEncoder
+from .ultra_processor import EnhancedSpatialValenceToCoordGeneration, UltraRobustSemanticEncoder
 
 # Import universal processor 
 from .universal_processor import UniversalSpatialProcessor
 
-# BACKWARD COMPATIBILITY: All old names now use ULTRA processor!
-SpatialValenceToCoordGeneration = UltraEnhancedSpatialValenceToCoordGeneration
-EnhancedSpatialValenceToCoordGeneration = UltraEnhancedSpatialValenceToCoordGeneration
+# Backward compatibility aliases
+SpatialValenceToCoordGeneration = EnhancedSpatialValenceToCoordGeneration
 
-__version__ = "3.0.0"  # Major version bump for ULTRA-by-default
+__version__ = "3.0.0"
 __author__ = "Sean"
 __email__ = "your-email@example.com"
-__description__ = "ULTRA-robust spatial valence processor for AI consciousness systems"
+__description__ = "Spatial valence processor for AI consciousness systems"
 
 __all__ = [
-    "SpatialValenceToCoordGeneration",  # Now ULTRA!
-    "EnhancedSpatialValenceToCoordGeneration",  # Now ULTRA!
-    "UltraEnhancedSpatialValenceToCoordGeneration",
+    "SpatialValenceToCoordGeneration",
+    "EnhancedSpatialValenceToCoordGeneration",
     "UltraRobustSemanticEncoder",
     "SemanticDepth",
     "UniversalSpatialProcessor",

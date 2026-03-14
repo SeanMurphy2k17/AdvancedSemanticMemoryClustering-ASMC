@@ -20,7 +20,7 @@ Sean's Insight: "Strong deterministic consistency across the board"
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'SpatialValienceToCoords'))
-from spatial_valence import UltraEnhancedSpatialValenceToCoordGeneration, SemanticDepth
+from spatial_valence import EnhancedSpatialValenceToCoordGeneration, SemanticDepth
 
 class UniversalSpatialProcessor:
     """
