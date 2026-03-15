@@ -6,3 +6,4 @@ MemoryStructures/LTM/
 MemoryStructures/STM/
 MemoryStructures/SCM/scm.lmdb/
 MemoryStructures/SCM/scm_operations.log
+imgui.ini

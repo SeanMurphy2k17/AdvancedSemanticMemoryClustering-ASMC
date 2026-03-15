@@ -447,16 +447,19 @@ class SemanticSTMManager:
         
         # Promote to long-term spatial memory using STM's already-computed coords
         try:
+            orig_meta = oldest_entry.get('metadata', {})
+            meta = {
+                'source': 'stm_promotion',
+                'original_timestamp': oldest_entry['timestamp'],
+                'original_coord_key': oldest_key,
+                'user_input': oldest_entry['user_input'],
+                'ai_response': oldest_entry['ai_response'],
+                'semantic_summary': oldest_entry['semantic_summary'],
+                **{k: v for k, v in orig_meta.items() if k not in ('source', 'original_timestamp', 'original_coord_key')}
+            }
             memory_id = self.engram_manager.store_memory(
                 text=oldest_entry['full_context'],
-                metadata={
-                    'source': 'stm_promotion',
-                    'original_timestamp': oldest_entry['timestamp'],
-                    'original_coord_key': oldest_key,
-                    'user_input': oldest_entry['user_input'],
-                    'ai_response': oldest_entry['ai_response'],
-                    'semantic_summary': oldest_entry['semantic_summary']
-                },
+                metadata=meta,
                 coord_result={
                     'coordinate_key': oldest_entry['coord_key'],
                     'coordinates': oldest_entry['coordinates'],

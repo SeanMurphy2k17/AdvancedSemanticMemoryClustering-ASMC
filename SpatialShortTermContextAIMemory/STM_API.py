@@ -230,43 +230,48 @@ class SemanticSTM_API:
                 complexity=complexity
             )
             
-            # Format LAYER 1: Immediate context (STM)
+            # Format LAYER 1: Immediate context (STM) — preserve metadata for tag/platform filtering
             formatted_recent = []
             for entry in context['recent_context']:
-                formatted_recent.append({
-                    "user_message": entry['user_input'],
-                    "ai_response": entry['ai_response'],
-                    "semantic_summary": entry['semantic_summary'],
-                    "timestamp": entry['timestamp']
-                })
-            
+                fmt = {"user_message": entry['user_input'], "ai_response": entry['ai_response'],
+                       "semantic_summary": entry['semantic_summary'], "timestamp": entry['timestamp']}
+                if entry.get('metadata'):
+                    fmt["metadata"] = entry['metadata']
+                formatted_recent.append(fmt)
+
             formatted_relevant = []
             for entry in context['relevant_context']:
-                formatted_relevant.append({
-                    "user_message": entry['user_input'],
-                    "ai_response": entry['ai_response'],
-                    "semantic_summary": entry['semantic_summary'],
-                    "timestamp": entry['timestamp']
-                })
+                fmt = {"user_message": entry['user_input'], "ai_response": entry['ai_response'],
+                       "semantic_summary": entry['semantic_summary'], "timestamp": entry['timestamp']}
+                if entry.get('metadata'):
+                    fmt["metadata"] = entry['metadata']
+                formatted_relevant.append(fmt)
             
-            # Format LAYER 2: Semantic depth (LTM)
+            # Format LAYER 2: Semantic depth (LTM) — preserve metadata for tag/platform filtering
+            def _ltm_meta(data):
+                m = data.get('metadata', {})
+                return m.get('metadata', m) if isinstance(m.get('metadata'), dict) else m
+
             formatted_ltm_semantic = []
             for match in context.get('ltm_semantic', []):
                 data = match.get('data', {})
-                formatted_ltm_semantic.append({
-                    "memory_text": data.get('input_text', ''),
-                    "semantic_summary": data.get('semantic_summary', ''),
-                    "timestamp": data.get('timestamp', 0)
-                })
-            
+                fmt = {"memory_text": data.get('input_text', ''), "semantic_summary": data.get('semantic_summary', ''),
+                       "timestamp": data.get('timestamp', 0)}
+                meta = _ltm_meta(data)
+                if meta:
+                    fmt["metadata"] = meta
+                formatted_ltm_semantic.append(fmt)
+
             formatted_ltm_neighbors = []
             for match in context.get('ltm_neighbors', []):
                 data = match.get('data', {}) if 'data' in match else match
-                formatted_ltm_neighbors.append({
-                    "memory_text": data.get('input_text', data.get('text', '')),
-                    "semantic_summary": data.get('semantic_summary', ''),
-                    "timestamp": data.get('timestamp', 0)
-                })
+                fmt = {"memory_text": data.get('input_text', data.get('text', '')),
+                       "semantic_summary": data.get('semantic_summary', ''),
+                       "timestamp": data.get('timestamp', 0)}
+                meta = _ltm_meta(data)
+                if meta:
+                    fmt["metadata"] = meta
+                formatted_ltm_neighbors.append(fmt)
             
             return {
                 "success": True,
