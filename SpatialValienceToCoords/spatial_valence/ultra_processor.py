@@ -25,7 +25,9 @@ import time
 
 # NLTK for SentiWordNet
 try:
+    import warnings
     import nltk
+    warnings.filterwarnings("ignore", category=UserWarning, module="nltk")
     from nltk.corpus import sentiwordnet as swn
     from nltk.corpus import wordnet as wn
     SENTIWORDNET_AVAILABLE = True

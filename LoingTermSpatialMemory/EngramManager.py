@@ -92,6 +92,7 @@ class EngramManager:
         self.memory_cache = []  # Cache last N memories for fast linking
         self.cache_size = 10   # Keep last 10 memories in RAM (1 succession + 9 spatial candidates)
         self.pending_updates = {}  # Batch updates for efficiency
+        self._warm_cache_from_db()
         
         # TURBO: Larger batches for MASSIVE databases
         self.batch_size = 500 if turbo_mode else 100  # Bigger batches for huge DBs
@@ -120,6 +121,38 @@ class EngramManager:
                 print("🚀 SPEED MODE: Minimal logging for bulk processing")
             print("🧠" * 30)
     
+    def _warm_cache_from_db(self):
+        """Pre-populate memory_cache from existing LMDB so links survive restarts."""
+        try:
+            import lmdb, pickle as _pickle
+            env = lmdb.open(self.db_manager.db_path, readonly=True, lock=False)
+            entries = []
+            with env.begin() as txn:
+                for _, raw in txn.cursor():
+                    try:
+                        mem = _pickle.loads(raw)
+                        meta = mem.get("metadata", {})
+                        coord_key = meta.get("coordinate_key", "")
+                        coords = mem.get("coordinates", {}) or meta.get("coordinates", {})
+                        if coord_key and coords:
+                            entries.append({
+                                "id": mem.get("id", 0),
+                                "coordinates": coords,
+                                "content": mem.get("input_text", "") or mem.get("input", ""),
+                                "coord_key": coord_key,
+                                "storage_data": meta,
+                            })
+                    except Exception:
+                        continue
+            env.close()
+            entries.sort(key=lambda x: x["id"])
+            self.memory_cache = entries[-self.cache_size:]
+            if self.verbose:
+                print(f"[EngramManager] Cache warmed: {len(self.memory_cache)} entries from LMDB")
+        except Exception as e:
+            if self.verbose:
+                print(f"[EngramManager] Cache warm skipped: {e}")
+
     def store_memory(self, text: str, metadata: Optional[Dict] = None, coord_result: Optional[Dict] = None) -> Optional[int]:
         """
         Store text in spatial memory system

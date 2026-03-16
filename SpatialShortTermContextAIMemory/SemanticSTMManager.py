@@ -455,6 +455,7 @@ class SemanticSTMManager:
                 'user_input': oldest_entry['user_input'],
                 'ai_response': oldest_entry['ai_response'],
                 'semantic_summary': oldest_entry['semantic_summary'],
+                'stm_semantic_links': oldest_entry.get('semantic_links', []),
                 **{k: v for k, v in orig_meta.items() if k not in ('source', 'original_timestamp', 'original_coord_key')}
             }
             memory_id = self.engram_manager.store_memory(

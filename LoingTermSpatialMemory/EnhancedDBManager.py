@@ -116,6 +116,10 @@ class EnhancedDBManager:
         coordinates = memory_data['coordinates']
         coord_key = self._create_coordinate_key(coordinates)
         
+        # Extract semantic_links BEFORE sanitization to prevent list-of-dicts destruction
+        raw_metadata = dict(memory_data.get('metadata', {}))
+        semantic_links = raw_metadata.pop('semantic_links', None) or memory_data.get('semantic_links', None)
+
         # NUCLEAR SANITIZATION - Convert everything to safe types
         sanitized_memory_data = {
             'id': int(memory_data.get('id', self.stats['total_memories'])),
@@ -125,12 +129,12 @@ class EnhancedDBManager:
             'semantic_summary': str(memory_data.get('semantic_summary', memory_data.get('semantic', ''))),
             'coordinates': coordinates,
             'timestamp': float(memory_data.get('timestamp', time.time())),
-            'metadata': self._sanitize_metadata(memory_data.get('metadata', {}))
+            'metadata': self._sanitize_metadata(raw_metadata)
         }
-        
-        # PRESERVE SEMANTIC LINKS AT TOP LEVEL - CRITICAL FOR SINGLE LOOKUP!
-        if 'semantic_links' in memory_data:
-            sanitized_memory_data['semantic_links'] = memory_data['semantic_links']
+
+        # PRESERVE SEMANTIC LINKS AT TOP LEVEL - safe from sanitizer
+        if semantic_links:
+            sanitized_memory_data['semantic_links'] = semantic_links
         
         # Store directly with coordinate key - SIMPLE!
         with self.env.begin(write=True) as txn:

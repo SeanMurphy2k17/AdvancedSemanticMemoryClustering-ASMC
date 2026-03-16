@@ -54,6 +54,7 @@ class DataReader:
         self._stm_keys      = set()
         self.last_positions = None
         self.last_keys      = []
+        self.selected_key   = None
 
     def _load_stm(self):
         best_data, best_mtime = None, 0
@@ -87,6 +88,7 @@ class DataReader:
                 "size":  size,
                 "type":  "stm",
                 "label": entry.get("semantic_summary", "")[:50],
+                "abc":   np.array([c.get("a",0), c.get("b",0), c.get("c",0)], dtype=np.float32),
             }
             new_keys.add(coord_key)
 
@@ -132,9 +134,11 @@ class DataReader:
                                 "size":  size,
                                 "type":  "ltm",
                                 "label": mem.get("semantic_summary", "")[:50],
+                                "mem":   mem,
+                                "abc":   np.array([coords.get("a",0), coords.get("b",0), coords.get("c",0)], dtype=np.float32),
                             }
 
-                        links = meta.get("semantic_links", {})
+                        links = mem.get("semantic_links", {}) or meta.get("semantic_links", {})
                         for lnk in links.get("succession_links", []):
                             tk = lnk.get("target_coordinate_key", "")
                             if tk:
@@ -147,6 +151,10 @@ class DataReader:
                                     np.array(COLOR_RADIAL, dtype=np.float32)))
                         for lnk in links.get("semantic_links", []):
                             tk = lnk.get("target_coordinate_key", "")
+                            if tk:
+                                self.edges.append((coord_key, tk,
+                                    np.array(COLOR_SEMANTIC, dtype=np.float32)))
+                        for tk in mem.get("metadata", {}).get("metadata", {}).get("stm_semantic_links", []):
                             if tk:
                                 self.edges.append((coord_key, tk,
                                     np.array(COLOR_SEMANTIC, dtype=np.float32)))
@@ -186,21 +194,9 @@ class DataReader:
                 except Exception:
                     pass
         else:
-            try:
-                import lmdb
-                env = lmdb.open(os.path.join(self.base_path, LTM_PATH), readonly=True, lock=False)
-                with env.begin() as txn:
-                    for _, raw in txn.cursor():
-                        try:
-                            mem = pickle.loads(raw)
-                            if mem.get("metadata", {}).get("coordinate_key") == key:
-                                env.close()
-                                return {"type": "ltm", "key": key, **mem}
-                        except Exception:
-                            pass
-                env.close()
-            except Exception:
-                pass
+            mem = node.get("mem")
+            if mem:
+                return {"type": "ltm", "key": key, **mem}
         return None
 
     def refresh(self):
@@ -230,14 +226,47 @@ class DataReader:
             self.last_keys      = keys
             pos_by_key = {k: positions[i] for i, k in enumerate(keys)}
 
+            # Selection dimming
+            sel = self.selected_key
+            connected = set()
+            if sel and sel in pos_by_key:
+                connected.add(sel)
+                for (ka, kb, _) in self.edges:
+                    if ka == sel: connected.add(kb)
+                    if kb == sel: connected.add(ka)
+                for i, k in enumerate(keys):
+                    if k not in connected:
+                        colors[i, 3] *= 0.08
+
             lpos, lcol, seen = [], [], set()
             for (ka, kb, col) in self.edges:
                 if ka in pos_by_key and kb in pos_by_key:
                     ek = (min(ka, kb), max(ka, kb))
                     if ek not in seen:
                         seen.add(ek)
+                        dim = 1.0 if (not sel or ka in connected or kb in connected) else 0.08
+                        c2  = np.array([col[0], col[1], col[2], col[3] * dim], dtype=np.float32)
                         lpos += [pos_by_key[ka], pos_by_key[kb]]
-                        lcol += [col, col]
+                        lcol += [c2, c2]
+
+            # Direction spikes (a,b,c vector)
+            SPIKE = 12.0; ARM = 4.0
+            SCOL  = np.array([0.4, 0.8, 1.0, 0.4], dtype=np.float32)
+            UP    = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+            for k in keys:
+                abc = self.nodes[k].get("abc")
+                if abc is None: continue
+                mag = float(np.linalg.norm(abc))
+                if mag < 1e-6: continue
+                dim = 1.0 if (not sel or k in connected) else 0.08
+                sc  = np.array([SCOL[0], SCOL[1], SCOL[2], SCOL[3] * dim], dtype=np.float32)
+                n   = abc / mag
+                p   = pos_by_key[k]; tip = p + n * SPIKE
+                ax  = UP if abs(n[1]) < 0.9 else np.array([1.,0.,0.], dtype=np.float32)
+                r   = np.cross(n, ax); r /= np.linalg.norm(r)
+                u   = np.cross(r, n)
+                lpos += [p, tip, tip - r*ARM, tip + r*ARM, tip - u*ARM, tip + u*ARM]
+                lcol += [sc] * 6
 
             lpos_arr = np.array(lpos, dtype=np.float32) if lpos else np.zeros((0, 3), dtype=np.float32)
             lcol_arr = np.array(lcol, dtype=np.float32) if lcol else np.zeros((0, 4), dtype=np.float32)
@@ -385,10 +414,22 @@ def _draw_info_panel(info):
     imgui.text(f"Intent: {meta.get('directive_intent', '') or meta.get('metadata', {}).get('directive_intent', '') or '—'}")
 
     if t == "STM":
-        imgui.separator()
-        imgui.text_wrapped(f"User: {str(info.get('user_input', ''))[:220]}")
-        imgui.separator()
-        imgui.text_wrapped(f"AI:   {str(info.get('ai_response', ''))[:220]}")
+        user_in = info.get("user_input", "")
+        ai_out  = info.get("ai_response", "")
+    else:
+        nested  = meta.get("metadata", {})
+        user_in = nested.get("user_input", "") or info.get("input_text", "") or info.get("input", "")
+        ai_out  = nested.get("ai_response", "")
+        links   = meta.get("semantic_links", {})
+        succ    = len(links.get("succession_links", []))
+        radial  = len(links.get("radial_links", []))
+        stm_lnk = len(nested.get("stm_semantic_links", []))
+        imgui.text(f"Links:  {succ} succession  {radial} radial  {stm_lnk} stm")
+
+    imgui.separator()
+    imgui.text_wrapped(f"User: {str(user_in)[:220]}")
+    imgui.separator()
+    imgui.text_wrapped(f"AI:   {str(ai_out)[:220]}")
 
     imgui.end()
 
@@ -410,6 +451,10 @@ def _print_node(info):
     if t == "STM":
         print(f"  User:    {str(info.get('user_input', ''))[:140]}")
         print(f"  AI:      {str(info.get('ai_response', ''))[:140]}")
+    else:
+        nested = meta.get("metadata", {})
+        print(f"  User:    {str(nested.get('user_input', '') or info.get('input_text', ''))[:140]}")
+        print(f"  AI:      {str(nested.get('ai_response', ''))[:140]}")
     print("──────────────────────────────────────────────────────")
 
 
@@ -516,6 +561,8 @@ def main():
                 fw, fh = glfw.get_framebuffer_size(win)
                 hit = reader.pick(cx, cy, cam.proj(fw, fh) @ cam.view(), fw, fh)
                 selected_info = reader.lookup_node(hit) if hit else None
+                reader.selected_key = hit
+                last_count = -1  # force re-upload with new dimming
 
         cur_count = len(reader.nodes)
         if cur_count != last_count:
