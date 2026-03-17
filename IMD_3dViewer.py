@@ -205,13 +205,17 @@ class DataReader:
             self._load_stm()
             self._load_ltm()
 
-    def get_gpu_arrays(self):
+    def get_gpu_arrays(self, show_stm_nodes=True, show_ltm_nodes=True,
+                       show_stm_links=True, show_ltm_links=True,
+                       show_scm=True, show_spikes=True):
         with self.lock:
-            keys = list(self.nodes.keys())
+            all_keys = list(self.nodes.keys())
+            keys = [k for k in all_keys if
+                    (self.nodes[k]["type"] == "stm" and show_stm_nodes) or
+                    (self.nodes[k]["type"] == "ltm" and show_ltm_nodes)]
             if not keys:
                 return None
 
-            key_idx  = {k: i for i, k in enumerate(keys)}
             positions = np.array([self.nodes[k]["pos"]   for k in keys], dtype=np.float32)
             colors    = np.array([self.nodes[k]["color"] for k in keys], dtype=np.float32)
             sizes     = np.array([self.nodes[k]["size"]  for k in keys], dtype=np.float32)
@@ -244,6 +248,16 @@ class DataReader:
                     ek = (min(ka, kb), max(ka, kb))
                     if ek not in seen:
                         seen.add(ek)
+                        # Identify edge type by node types and color
+                        ta = self.nodes.get(ka, {}).get("type", "ltm")
+                        tb = self.nodes.get(kb, {}).get("type", "ltm")
+                        is_scm = col[0] < 0.5 and col[1] > 0.8  # green = succession
+                        is_stm_edge = ta == "stm" and tb == "stm"
+                        if is_scm:
+                            if not show_scm: continue
+                        else:
+                            if is_stm_edge and not show_stm_links: continue
+                            if not is_stm_edge and not show_ltm_links: continue
                         dim = 1.0 if (not sel or ka in connected or kb in connected) else 0.08
                         c2  = np.array([col[0], col[1], col[2], col[3] * dim], dtype=np.float32)
                         lpos += [pos_by_key[ka], pos_by_key[kb]]
@@ -253,7 +267,7 @@ class DataReader:
             SPIKE = 12.0; ARM = 4.0
             SCOL  = np.array([0.4, 0.8, 1.0, 0.4], dtype=np.float32)
             UP    = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-            for k in keys:
+            for k in (keys if show_spikes else []):
                 abc = self.nodes[k].get("abc")
                 if abc is None: continue
                 mag = float(np.linalg.norm(abc))
@@ -482,9 +496,20 @@ def main():
     imgui.create_context()
     impl = GlfwRenderer(win, attach_callbacks=False)
 
-    glfw.set_mouse_button_callback(win, lambda w, b, a, m: cam.on_mouse_button(w, b, a))
-    glfw.set_cursor_pos_callback(win,   lambda w, x, y: cam.on_cursor(x, y))
-    glfw.set_scroll_callback(win,       lambda w, dx, dy: cam.on_scroll(dy))
+    def _mouse_btn(w, b, a, m):
+        impl.mouse_button_callback(w, b, a, m)
+        if not imgui.get_io().want_capture_mouse:
+            cam.on_mouse_button(w, b, a)
+    def _scroll(w, dx, dy):
+        impl.scroll_callback(w, dx, dy)
+        if not imgui.get_io().want_capture_mouse:
+            cam.on_scroll(dy)
+    glfw.set_mouse_button_callback(win, _mouse_btn)
+    def _cursor(w, x, y):
+        impl.mouse_callback()
+        cam.on_cursor(x, y)
+    glfw.set_cursor_pos_callback(win, _cursor)
+    glfw.set_scroll_callback(win,       _scroll)
 
     def on_key(w, key, sc, action, mods):
         if action == glfw.PRESS:
@@ -523,7 +548,10 @@ def main():
 
     def upload_to_gpu():
         nonlocal n_pts, n_lns
-        result = reader.get_gpu_arrays()
+        result = reader.get_gpu_arrays(
+            show_stm_nodes=vis["stm_nodes"], show_ltm_nodes=vis["ltm_nodes"],
+            show_stm_links=vis["stm_links"], show_ltm_links=vis["ltm_links"],
+            show_scm=vis["scm"],             show_spikes=vis["spikes"])
         if result is None:
             n_pts = n_lns = 0
             return 0, 0, 0
@@ -539,6 +567,10 @@ def main():
             ln_vbo_pos.orphan(lpos.nbytes);  ln_vbo_pos.write(lpos.tobytes())
             ln_vbo_col.orphan(lcol.nbytes);  ln_vbo_col.write(lcol.tobytes())
         return stm_c, ltm_c, n_lns
+
+    # Visibility toggles
+    vis = {"stm_nodes": True, "ltm_nodes": True, "stm_links": True,
+           "ltm_links": True, "scm": True, "spikes": True}
 
     # Initial load
     reader.refresh()
@@ -587,6 +619,24 @@ def main():
 
         impl.process_inputs()
         imgui.new_frame()
+
+        PANEL_W = 170
+        imgui.set_next_window_pos((w - PANEL_W - 10, 10), imgui.Cond_.always)
+        imgui.set_next_window_size((PANEL_W, 175), imgui.Cond_.always)
+        imgui.begin("Visibility", flags=imgui.WindowFlags_.no_resize | imgui.WindowFlags_.no_move)
+        ch_a, vis["stm_nodes"] = imgui.checkbox("STM Nodes",   vis["stm_nodes"])
+        ch_b, vis["ltm_nodes"] = imgui.checkbox("LTM Nodes",   vis["ltm_nodes"])
+        imgui.separator()
+        ch_c, vis["stm_links"] = imgui.checkbox("STM Links",   vis["stm_links"])
+        ch_d, vis["ltm_links"] = imgui.checkbox("LTM Links",   vis["ltm_links"])
+        ch_e, vis["scm"]       = imgui.checkbox("SCM Chain",   vis["scm"])
+        imgui.separator()
+        ch_f, vis["spikes"]    = imgui.checkbox("Dir Spikes",  vis["spikes"])
+        imgui.end()
+
+        if ch_a or ch_b or ch_c or ch_d or ch_e or ch_f:
+            last_count = -1  # triggers upload_to_gpu() before next render
+
         if selected_info is not None:
             _draw_info_panel(selected_info)
         imgui.render()
