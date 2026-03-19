@@ -87,7 +87,7 @@ class DataReader:
                 "color": np.array(COLOR_STM, dtype=np.float32),
                 "size":  size,
                 "type":  "stm",
-                "label": entry.get("semantic_summary", "")[:50],
+                "label": entry.get("semantic_summary", ""),
                 "abc":   np.array([c.get("a",0), c.get("b",0), c.get("c",0)], dtype=np.float32),
             }
             new_keys.add(coord_key)
@@ -133,7 +133,7 @@ class DataReader:
                                 "color": np.array(COLOR_LTM, dtype=np.float32),
                                 "size":  size,
                                 "type":  "ltm",
-                                "label": mem.get("semantic_summary", "")[:50],
+                                "label": mem.get("semantic_summary", ""),
                                 "mem":   mem,
                                 "abc":   np.array([coords.get("a",0), coords.get("b",0), coords.get("c",0)], dtype=np.float32),
                             }
@@ -412,7 +412,7 @@ def _draw_info_panel(info):
     tint = (0.4, 0.8, 1.0, 1.0) if t == "STM" else (1.0, 0.6, 0.2, 1.0)
     imgui.text_colored(tint, f"[{t}]")
     imgui.same_line()
-    imgui.text(info.get("key", "")[:55])
+    imgui.text_wrapped(info.get("key", ""))
     imgui.separator()
     imgui.text_wrapped(info.get("semantic_summary", "") or "—")
     imgui.spacing()
@@ -441,9 +441,9 @@ def _draw_info_panel(info):
         imgui.text(f"Links:  {succ} succession  {radial} radial  {stm_lnk} stm")
 
     imgui.separator()
-    imgui.text_wrapped(f"User: {str(user_in)[:220]}")
+    imgui.text_wrapped(f"User: {str(user_in)}")
     imgui.separator()
-    imgui.text_wrapped(f"AI:   {str(ai_out)[:220]}")
+    imgui.text_wrapped(f"AI:   {str(ai_out)}")
 
     imgui.end()
 

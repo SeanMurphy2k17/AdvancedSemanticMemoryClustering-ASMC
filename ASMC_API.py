@@ -648,7 +648,7 @@ class AdvancedSemanticMemory:
         # Recent memories - FULL context with complete causation chains
         if context['stm_memories']:
             lines.append("\nRecent experiences:")
-            for mem in context['stm_memories'][:5]:  # Top 5 recent memories
+            for mem in context['stm_memories']:
                 full_context = mem.get('full_context', '')
                 if full_context:
                     lines.append(f"  {full_context}")
@@ -657,7 +657,7 @@ class AdvancedSemanticMemory:
         # Long-term patterns
         if context['ltm_patterns']:
             lines.append("\nKnown patterns:")
-            for pat in context['ltm_patterns'][:5]:  # Top 5 patterns
+            for pat in context['ltm_patterns']:
                 lines.append(f"  - {pat['concept']} (strength: {pat['strength']:.2f})")
         
         # Neighbors/exits
