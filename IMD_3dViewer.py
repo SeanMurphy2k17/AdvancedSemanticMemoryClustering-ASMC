@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
 IMD_3dViewer — Interactive Memory Dimension Viewer
-Real-time 3D visualization of ASMC memory space (STM + LTM)
+Real-time 3D visualization of ASMC V2 memory space (STM + LTM + anchors)
 
-9D coordinates mapped as:
-  Position (x, y, z) → world position
-  Scale    (d, e, f) → point size (phase 1)
-  Rotation (a, b, c) → color tint (phase 1)
+6D coordinates mapped as:
+  Position (x, y, z) → world position  [0:3]
+  Direction spike (a, b, c) → orientation arrow  [3:6]
 
 Colors:
-  Blue   = STM (RAM)         Orange = LTM (LMDB)
-  White  = semantic links    Green  = succession links
-  Yellow = radial links
+  Blue   = STM memories      Orange = LTM memories
+  Teal   = SCM anchor nodes  White  = linked memory edges
+  Green  = anchor chain edges
 
 Controls:
   Left drag → orbit    Scroll → zoom    R → reset    Q/Esc → quit
@@ -21,7 +20,6 @@ import json
 import os
 import time
 import math
-import pickle
 import threading
 import numpy as np
 import glfw
@@ -29,74 +27,82 @@ import moderngl
 from imgui_bundle import imgui
 from imgui_bundle.python_backends.glfw_backend import GlfwRenderer
 
-STM_PATHS = [
-    "MemoryStructures/STM/stm_cache_A.json",
-    "MemoryStructures/STM/stm_cache_B.json",
-]
-LTM_PATH    = "MemoryStructures/LTM/ltm.lmdb"
+STM_PATH      = "V2/MemoryStructures/STM/stm.json"
+LTM_PATH      = "V2/MemoryStructures/LTM"
 POLL_INTERVAL = 2.0
 
-COLOR_STM        = (0.3, 0.6, 1.0, 1.0)
-COLOR_LTM        = (1.0, 0.55, 0.15, 1.0)
-COLOR_SEMANTIC   = (1.0, 1.0, 1.0, 0.5)
-COLOR_SUCCESSION = (0.3, 1.0, 0.4, 0.6)
-COLOR_RADIAL     = (1.0, 0.9, 0.2, 0.45)
+COLOR_STM      = (0.3, 0.6, 1.0, 1.0)
+COLOR_LTM      = (1.0, 0.55, 0.15, 1.0)
+COLOR_ANCHOR   = (0.2, 0.9, 0.7, 1.0)
+COLOR_LINK     = (1.0, 1.0, 1.0, 0.5)
+COLOR_CHAIN    = (0.3, 1.0, 0.4, 0.6)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+def _pos6_to_3(pos6):
+    """Return xyz array from 6D list/tuple."""
+    return np.array(pos6[:3], dtype=np.float32)
+
+def _abc6(pos6):
+    """Return abc vector from 6D list/tuple."""
+    return np.array(pos6[3:6], dtype=np.float32)
+
+def _node_key(entry):
+    """Stable unique key for a memory entry."""
+    return entry.get("timeDate", str(entry.get("inputPos", "")))
+
+
 class DataReader:
     def __init__(self, base_path):
-        self.base_path   = base_path
-        self.lock        = threading.Lock()
-        self.nodes          = {}   # coord_key → {pos, color, size, type}
+        self.base_path      = base_path
+        self.lock           = threading.Lock()
+        self.nodes          = {}   # key → {pos, color, size, type, entry}
         self.edges          = []   # [(ka, kb, color_arr)]
         self._stm_mtime     = 0
         self._stm_keys      = set()
+        self._pos_to_key    = {}   # tuple(inputPos) → key  (for linking)
         self.last_positions = None
         self.last_keys      = []
         self.selected_key   = None
 
     def _load_stm(self):
-        best_data, best_mtime = None, 0
-        for rel in STM_PATHS:
-            path = os.path.join(self.base_path, rel)
-            try:
-                mt = os.path.getmtime(path)
-                if mt > best_mtime:
-                    best_mtime = mt
-                    with open(path) as f:
-                        best_data = json.load(f)
-            except Exception:
-                pass
-
-        if best_data is None or best_mtime == self._stm_mtime:
+        path = os.path.join(self.base_path, STM_PATH)
+        try:
+            mt = os.path.getmtime(path)
+        except OSError:
             return
-        self._stm_mtime = best_mtime
+        if mt == self._stm_mtime:
+            return
+        self._stm_mtime = mt
 
-        entries     = best_data.get("stm_entries", {})
-        new_keys    = set()
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except Exception:
+            return
 
-        for coord_key, entry in entries.items():
-            c   = entry.get("coordinates", {})
-            pos = np.array([c.get("x", 0), c.get("y", 0), c.get("z", 0)], dtype=np.float32)
-            d, e, f = c.get("d", 0), c.get("e", 0), c.get("f", 0)
-            size = max(5.0, 10.0 + (abs(d) + abs(e) + abs(f)) * 5.0)
+        entries  = data.get("entries", [])
+        new_keys = set()
 
-            self.nodes[coord_key] = {
+        for entry in entries:
+            key  = _node_key(entry)
+            ip   = entry.get("inputPos") or [0]*6
+            pos  = _pos6_to_3(ip)
+            abc  = _abc6(ip)
+            size = max(5.0, 10.0 + float(np.linalg.norm(abc)) * 5.0)
+
+            self.nodes[key] = {
                 "pos":   pos,
                 "color": np.array(COLOR_STM, dtype=np.float32),
                 "size":  size,
                 "type":  "stm",
-                "label": entry.get("semantic_summary", ""),
-                "abc":   np.array([c.get("a",0), c.get("b",0), c.get("c",0)], dtype=np.float32),
+                "label": (entry.get("inputText") or "")[:60],
+                "abc":   abc,
+                "entry": entry,
             }
-            new_keys.add(coord_key)
+            self._pos_to_key[tuple(ip)] = key
+            new_keys.add(key)
 
-            for linked in entry.get("semantic_links", []):
-                self.edges.append((coord_key, linked,
-                                   np.array(COLOR_SEMANTIC, dtype=np.float32)))
-
-        # Remove promoted-away STM nodes
         for old in self._stm_keys - new_keys:
             if old in self.nodes and self.nodes[old]["type"] == "stm":
                 del self.nodes[old]
@@ -108,61 +114,60 @@ class DataReader:
             return
         try:
             import lmdb
-            env = lmdb.open(path, readonly=True, lock=False)
+            env = lmdb.open(path, readonly=True, lock=False, subdir=True)
             with env.begin() as txn:
                 for _, raw in txn.cursor():
                     try:
-                        mem    = pickle.loads(raw)
-                        coords = mem.get("coordinates", {})
-                        if not coords:
-                            continue
-                        meta      = mem.get("metadata", {})
-                        coord_key = meta.get("coordinate_key", "")
-                        if not coord_key:
-                            continue
-
-                        pos  = np.array([coords.get("x", 0), coords.get("y", 0),
-                                         coords.get("z", 0)], dtype=np.float32)
-                        d, e, f = coords.get("d", 0), coords.get("e", 0), coords.get("f", 0)
-                        size = max(4.0, 7.0 + (abs(d) + abs(e) + abs(f)) * 4.0)
-
-                        # Don't overwrite an STM node still in RAM
-                        if coord_key not in self.nodes:
-                            self.nodes[coord_key] = {
-                                "pos":   pos,
-                                "color": np.array(COLOR_LTM, dtype=np.float32),
-                                "size":  size,
-                                "type":  "ltm",
-                                "label": mem.get("semantic_summary", ""),
-                                "mem":   mem,
-                                "abc":   np.array([coords.get("a",0), coords.get("b",0), coords.get("c",0)], dtype=np.float32),
-                            }
-
-                        links = mem.get("semantic_links", {}) or meta.get("semantic_links", {})
-                        for lnk in links.get("succession_links", []):
-                            tk = lnk.get("target_coordinate_key", "")
-                            if tk:
-                                self.edges.append((coord_key, tk,
-                                    np.array(COLOR_SUCCESSION, dtype=np.float32)))
-                        for lnk in links.get("radial_links", []):
-                            tk = lnk.get("target_coordinate_key", "")
-                            if tk:
-                                self.edges.append((coord_key, tk,
-                                    np.array(COLOR_RADIAL, dtype=np.float32)))
-                        for lnk in links.get("semantic_links", []):
-                            tk = lnk.get("target_coordinate_key", "")
-                            if tk:
-                                self.edges.append((coord_key, tk,
-                                    np.array(COLOR_SEMANTIC, dtype=np.float32)))
-                        for tk in mem.get("metadata", {}).get("metadata", {}).get("stm_semantic_links", []):
-                            if tk:
-                                self.edges.append((coord_key, tk,
-                                    np.array(COLOR_SEMANTIC, dtype=np.float32)))
+                        entry = json.loads(raw)
                     except Exception:
-                        pass
+                        continue
+
+                    ip  = entry.get("inputPos") or entry.get("responsePos") or [0]*6
+                    key = _node_key(entry)
+                    if not key or key in self.nodes:
+                        continue
+
+                    pos  = _pos6_to_3(ip)
+                    abc  = _abc6(ip)
+                    size = max(4.0, 7.0 + float(np.linalg.norm(abc)) * 4.0)
+                    is_anchor = entry.get("metaDataTag", {}).get("type") == "scm_anchor"
+                    color = COLOR_ANCHOR if is_anchor else COLOR_LTM
+
+                    self.nodes[key] = {
+                        "pos":   pos,
+                        "color": np.array(color, dtype=np.float32),
+                        "size":  size * (1.6 if is_anchor else 1.0),
+                        "type":  "anchor" if is_anchor else "ltm",
+                        "label": (entry.get("inputText") or "")[:60],
+                        "abc":   abc,
+                        "entry": entry,
+                    }
+                    self._pos_to_key[tuple(ip)] = key
             env.close()
         except Exception:
             pass
+
+    def _build_edges(self):
+        """Construct edges from linkedMemories and linked_anchors after loading."""
+        ltm_id_to_key = {}
+        for key, node in self.nodes.items():
+            entry = node.get("entry", {})
+            ltm_id = entry.get("metaDataTag", {}).get("ltm_id")
+            if ltm_id is not None:
+                ltm_id_to_key[ltm_id] = key
+
+        for key, node in self.nodes.items():
+            entry = node.get("entry", {})
+            # linkedMemories: list of 6D positions
+            for lm_pos in entry.get("linkedMemories", []):
+                tk = self._pos_to_key.get(tuple(lm_pos))
+                if tk and tk != key:
+                    self.edges.append((key, tk, np.array(COLOR_LINK, dtype=np.float32)))
+            # linked_anchors: list of ltm integer IDs
+            for lid in entry.get("linked_anchors", []):
+                tk = ltm_id_to_key.get(lid)
+                if tk and tk != key:
+                    self.edges.append((key, tk, np.array(COLOR_CHAIN, dtype=np.float32)))
 
     def pick(self, cx, cy, mvp_mat, w, h, radius=15):
         if self.last_positions is None or len(self.last_keys) == 0:
@@ -183,27 +188,15 @@ class DataReader:
         node = self.nodes.get(key)
         if node is None:
             return None
-        if node["type"] == "stm":
-            for rel in STM_PATHS:
-                try:
-                    with open(os.path.join(self.base_path, rel)) as f:
-                        data = json.load(f)
-                    entry = data.get("stm_entries", {}).get(key)
-                    if entry:
-                        return {"type": "stm", "key": key, **entry}
-                except Exception:
-                    pass
-        else:
-            mem = node.get("mem")
-            if mem:
-                return {"type": "ltm", "key": key, **mem}
-        return None
+        return {"type": node["type"], "key": key, **node.get("entry", {})}
 
     def refresh(self):
         with self.lock:
-            self.edges = []
+            self.edges      = []
+            self._pos_to_key = {}
             self._load_stm()
             self._load_ltm()
+            self._build_edges()
 
     def get_gpu_arrays(self, show_stm_nodes=True, show_ltm_nodes=True,
                        show_stm_links=True, show_ltm_links=True,
@@ -211,8 +204,9 @@ class DataReader:
         with self.lock:
             all_keys = list(self.nodes.keys())
             keys = [k for k in all_keys if
-                    (self.nodes[k]["type"] == "stm" and show_stm_nodes) or
-                    (self.nodes[k]["type"] == "ltm" and show_ltm_nodes)]
+                    (self.nodes[k]["type"] == "stm"    and show_stm_nodes) or
+                    (self.nodes[k]["type"] == "ltm"    and show_ltm_nodes) or
+                    (self.nodes[k]["type"] == "anchor" and show_scm)]
             if not keys:
                 return None
 
@@ -220,17 +214,15 @@ class DataReader:
             colors    = np.array([self.nodes[k]["color"] for k in keys], dtype=np.float32)
             sizes     = np.array([self.nodes[k]["size"]  for k in keys], dtype=np.float32)
 
-            # Center on cluster centroid, then scale each axis independently
-            centroid     = positions.mean(axis=0)
-            centered     = positions - centroid
-            axis_spread  = np.abs(centered).max(axis=0)
-            axis_spread  = np.maximum(axis_spread, 1e-6)
-            positions    = centered / axis_spread * 100.0
+            centroid    = positions.mean(axis=0)
+            centered    = positions - centroid
+            axis_spread = np.abs(centered).max(axis=0)
+            axis_spread = np.maximum(axis_spread, 1e-6)
+            positions   = centered / axis_spread * 100.0
             self.last_positions = positions
             self.last_keys      = keys
             pos_by_key = {k: positions[i] for i, k in enumerate(keys)}
 
-            # Selection dimming
             sel = self.selected_key
             connected = set()
             if sel and sel in pos_by_key:
@@ -244,26 +236,26 @@ class DataReader:
 
             lpos, lcol, seen = [], [], set()
             for (ka, kb, col) in self.edges:
-                if ka in pos_by_key and kb in pos_by_key:
-                    ek = (min(ka, kb), max(ka, kb))
-                    if ek not in seen:
-                        seen.add(ek)
-                        # Identify edge type by node types and color
-                        ta = self.nodes.get(ka, {}).get("type", "ltm")
-                        tb = self.nodes.get(kb, {}).get("type", "ltm")
-                        is_scm = col[0] < 0.5 and col[1] > 0.8  # green = succession
-                        is_stm_edge = ta == "stm" and tb == "stm"
-                        if is_scm:
-                            if not show_scm: continue
-                        else:
-                            if is_stm_edge and not show_stm_links: continue
-                            if not is_stm_edge and not show_ltm_links: continue
-                        dim = 1.0 if (not sel or ka in connected or kb in connected) else 0.08
-                        c2  = np.array([col[0], col[1], col[2], col[3] * dim], dtype=np.float32)
-                        lpos += [pos_by_key[ka], pos_by_key[kb]]
-                        lcol += [c2, c2]
+                if ka not in pos_by_key or kb not in pos_by_key:
+                    continue
+                ek = (min(ka, kb), max(ka, kb))
+                if ek in seen:
+                    continue
+                seen.add(ek)
+                ta = self.nodes.get(ka, {}).get("type", "ltm")
+                tb = self.nodes.get(kb, {}).get("type", "ltm")
+                is_chain    = col[1] > 0.8 and col[0] < 0.5   # green = anchor chain
+                is_stm_edge = ta == "stm" and tb == "stm"
+                if is_chain:
+                    if not show_scm: continue
+                else:
+                    if is_stm_edge and not show_stm_links: continue
+                    if not is_stm_edge and not show_ltm_links: continue
+                dim = 1.0 if (not sel or ka in connected or kb in connected) else 0.08
+                c2  = np.array([col[0], col[1], col[2], col[3] * dim], dtype=np.float32)
+                lpos += [pos_by_key[ka], pos_by_key[kb]]
+                lcol += [c2, c2]
 
-            # Direction spikes (a,b,c vector)
             SPIKE = 12.0; ARM = 4.0
             SCOL  = np.array([0.4, 0.8, 1.0, 0.4], dtype=np.float32)
             UP    = np.array([0.0, 1.0, 0.0], dtype=np.float32)
@@ -285,10 +277,11 @@ class DataReader:
             lpos_arr = np.array(lpos, dtype=np.float32) if lpos else np.zeros((0, 3), dtype=np.float32)
             lcol_arr = np.array(lcol, dtype=np.float32) if lcol else np.zeros((0, 4), dtype=np.float32)
 
-            stm_count = sum(1 for k in keys if self.nodes[k]["type"] == "stm")
-            ltm_count = len(keys) - stm_count
+            stm_count    = sum(1 for k in keys if self.nodes[k]["type"] == "stm")
+            anchor_count = sum(1 for k in keys if self.nodes[k]["type"] == "anchor")
+            ltm_count    = len(keys) - stm_count - anchor_count
 
-            return positions, colors, sizes, lpos_arr, lcol_arr, stm_count, ltm_count
+            return positions, colors, sizes, lpos_arr, lcol_arr, stm_count, ltm_count, anchor_count
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -403,48 +396,41 @@ void main() { f_color = v_color; }
 # ─────────────────────────────────────────────────────────────────────────────
 def _draw_info_panel(info):
     imgui.set_next_window_pos((10.0, 10.0), imgui.Cond_.once)
-    imgui.set_next_window_size((460.0, 340.0), imgui.Cond_.once)
+    imgui.set_next_window_size((460.0, 360.0), imgui.Cond_.once)
     imgui.push_style_color(imgui.Col_.window_bg, (0.07, 0.07, 0.12, 0.93))
     imgui.begin("Memory Node  (click empty space to clear)")
     imgui.pop_style_color()
 
     t = info.get("type", "?").upper()
-    tint = (0.4, 0.8, 1.0, 1.0) if t == "STM" else (1.0, 0.6, 0.2, 1.0)
+    tint_map = {"STM": (0.4, 0.8, 1.0, 1.0), "ANCHOR": (0.2, 0.9, 0.7, 1.0)}
+    tint = tint_map.get(t, (1.0, 0.6, 0.2, 1.0))
     imgui.text_colored(tint, f"[{t}]")
     imgui.same_line()
-    imgui.text_wrapped(info.get("key", ""))
-    imgui.separator()
-    imgui.text_wrapped(info.get("semantic_summary", "") or "—")
-    imgui.spacing()
-
-    c = info.get("coordinates", {})
-    imgui.text(f"x={c.get('x',0):.4f}  y={c.get('y',0):.4f}  z={c.get('z',0):.4f}")
-    imgui.text(f"d={c.get('d',0):.4f}  e={c.get('e',0):.4f}  f={c.get('f',0):.4f}")
+    imgui.text_wrapped(info.get("key", "")[:80])
     imgui.separator()
 
-    meta = info.get("metadata", {})
-    tags = meta.get("tags") or meta.get("metadata", {}).get("tags", [])
-    imgui.text(f"Tags:   {tags}")
-    imgui.text(f"Intent: {meta.get('directive_intent', '') or meta.get('metadata', {}).get('directive_intent', '') or '—'}")
+    ip = info.get("inputPos") or [0]*6
+    imgui.text(f"X={ip[0]:.2f}  Y={ip[1]:.2f}  Z={ip[2]:.2f}")
+    imgui.text(f"A={ip[3]:.2f}  B={ip[4]:.2f}  C={ip[5]:.2f}")
+    imgui.separator()
 
-    if t == "STM":
-        user_in = info.get("user_input", "")
-        ai_out  = info.get("ai_response", "")
+    meta = info.get("metaDataTag") or {}
+    if t == "ANCHOR":
+        imgui.text(f"Cluster:  {meta.get('cluster_id', '—')}")
+        imgui.text(f"Visits:   {meta.get('visit_count', 0)}")
+        imgui.text(f"Valence:  {meta.get('aggregate_valence', 0.0):.3f}")
+        linked = len(info.get("linked_anchors", []))
+        imgui.text(f"Anchors:  {linked} linked")
     else:
-        nested  = meta.get("metadata", {})
-        user_in = nested.get("user_input", "") or info.get("input_text", "") or info.get("input", "")
-        ai_out  = nested.get("ai_response", "")
-        links   = meta.get("semantic_links", {})
-        succ    = len(links.get("succession_links", []))
-        radial  = len(links.get("radial_links", []))
-        stm_lnk = len(nested.get("stm_semantic_links", []))
-        imgui.text(f"Links:  {succ} succession  {radial} radial  {stm_lnk} stm")
+        linked = len(info.get("linkedMemories", []))
+        imgui.text(f"Links:    {linked} nearby memories")
+        if meta:
+            imgui.text(f"Meta:     {str(meta)[:80]}")
 
     imgui.separator()
-    imgui.text_wrapped(f"User: {str(user_in)}")
+    imgui.text_wrapped(f"Input:    {str(info.get('inputText', '') or '—')}")
     imgui.separator()
-    imgui.text_wrapped(f"AI:   {str(ai_out)}")
-
+    imgui.text_wrapped(f"Response: {str(info.get('responseText', '') or '—')}")
     imgui.end()
 
 
@@ -454,21 +440,21 @@ def _print_node(info):
         return
     t = info.get("type", "?").upper()
     print(f"\n── {t} NODE ──────────────────────────────────────────")
-    print(f"  Key:     {info.get('key', '')}")
-    print(f"  Summary: {info.get('semantic_summary', '')}")
-    c = info.get("coordinates", {})
-    print(f"  Coords:  x={c.get('x',0):.4f}  y={c.get('y',0):.4f}  z={c.get('z',0):.4f}")
-    print(f"           d={c.get('d',0):.4f}  e={c.get('e',0):.4f}  f={c.get('f',0):.4f}")
-    meta = info.get("metadata", {})
-    print(f"  Tags:    {meta.get('tags', [])}")
-    print(f"  Intent:  {meta.get('directive_intent', '')}")
-    if t == "STM":
-        print(f"  User:    {str(info.get('user_input', ''))[:140]}")
-        print(f"  AI:      {str(info.get('ai_response', ''))[:140]}")
+    ip = info.get("inputPos") or [0]*6
+    print(f"  Key:      {info.get('key', '')}")
+    print(f"  Input:    {str(info.get('inputText', ''))[:140]}")
+    print(f"  Response: {str(info.get('responseText', ''))[:140]}")
+    print(f"  inputPos: X={ip[0]:.2f} Y={ip[1]:.2f} Z={ip[2]:.2f} A={ip[3]:.2f} B={ip[4]:.2f} C={ip[5]:.2f}")
+    meta = info.get("metaDataTag") or {}
+    if t == "ANCHOR":
+        print(f"  Cluster:  {meta.get('cluster_id', '')}")
+        print(f"  Visits:   {meta.get('visit_count', 0)}")
+        print(f"  Valence:  {meta.get('aggregate_valence', 0.0):.3f}")
+        print(f"  Chains:   {info.get('linked_anchors', [])}")
     else:
-        nested = meta.get("metadata", {})
-        print(f"  User:    {str(nested.get('user_input', '') or info.get('input_text', ''))[:140]}")
-        print(f"  AI:      {str(nested.get('ai_response', ''))[:140]}")
+        print(f"  Links:    {len(info.get('linkedMemories', []))} nearby memories")
+        if meta:
+            print(f"  Meta:     {meta}")
     print("──────────────────────────────────────────────────────")
 
 
@@ -554,8 +540,8 @@ def main():
             show_scm=vis["scm"],             show_spikes=vis["spikes"])
         if result is None:
             n_pts = n_lns = 0
-            return 0, 0, 0
-        pos, col, siz, lpos, lcol, stm_c, ltm_c = result
+            return 0, 0, 0, 0
+        pos, col, siz, lpos, lcol, stm_c, ltm_c, anc_c = result
         n_pts = len(pos)
         n_lns = len(lpos) // 2
 
@@ -566,7 +552,7 @@ def main():
         if n_lns:
             ln_vbo_pos.orphan(lpos.nbytes);  ln_vbo_pos.write(lpos.tobytes())
             ln_vbo_col.orphan(lcol.nbytes);  ln_vbo_col.write(lcol.tobytes())
-        return stm_c, ltm_c, n_lns
+        return stm_c, ltm_c, anc_c, n_lns
 
     # Visibility toggles
     vis = {"stm_nodes": True, "ltm_nodes": True, "stm_links": True,
@@ -574,7 +560,7 @@ def main():
 
     # Initial load
     reader.refresh()
-    stm_c, ltm_c, lnk_c = upload_to_gpu()
+    stm_c, ltm_c, anc_c, lnk_c = upload_to_gpu()
 
     # Background poll
     def poll_loop():
@@ -598,10 +584,10 @@ def main():
 
         cur_count = len(reader.nodes)
         if cur_count != last_count:
-            stm_c, ltm_c, lnk_c = upload_to_gpu()
+            stm_c, ltm_c, anc_c, lnk_c = upload_to_gpu()
             last_count = cur_count
             glfw.set_window_title(win,
-                f"IMD 3D Memory Viewer  |  STM: {stm_c}  LTM: {ltm_c}  Links: {lnk_c}")
+                f"IMD 3D Memory Viewer  |  STM: {stm_c}  LTM: {ltm_c}  Anchors: {anc_c}  Links: {lnk_c}")
 
         w, h = glfw.get_framebuffer_size(win)
         ctx.viewport = (0, 0, w, h)

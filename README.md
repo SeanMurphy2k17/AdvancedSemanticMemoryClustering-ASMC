@@ -2,6 +2,8 @@
 
 **A three-layer semantic memory system for persistent context management in LLM applications**
 
+> V2 — NLTK/WordNet-based no-ML 6D coordinate engine, FAISS+LMDB long-term store, navigable SCM anchor graph
+
 Built by Sean Murphy & Claude AI | MIT License
 
 ---
@@ -13,13 +15,13 @@ ASMC is a **three-layer episodic memory architecture** that extends LLM-based sy
 ### Core Architecture
 
 - **Layer 1 (STM):** Temporal buffer for recent interactions with semantic relevance scoring
-- **Layer 2 (LTM):** Persistent 9-dimensional semantic space with coordinate-based clustering and associative linking
-- **Layer 3 (SCM):** Spatial-temporal anchoring system for location-indexed episodic retrieval with visit frequency tracking and valence scoring
+- **Layer 2 (LTM):** Persistent 6-dimensional semantic space using FAISS vector search + LMDB payload store
+- **Layer 3 (SCM):** Navigable anchor graph stored directly in LTM — fixed "fixtures of reality" (places, chapters, events) with bidirectional structural links and visit/valence tracking
 
 ### Mathematical Foundation
 
-Semantic content is mapped to a 9-dimensional coordinate system where **Euclidean distance = semantic similarity**. This enables:
-- **O(log n) retrieval** via spatial indexing in LMDB
+Semantic content is mapped to a 6-dimensional coordinate system (derived purely from NLTK WordNet + SentiWordNet — no ML training required) where **Euclidean distance = semantic similarity**. This enables:
+- **O(log n) retrieval** via FAISS approximate nearest-neighbor search
 - **Clustering without supervision** through natural coordinate proximity
 - **Cross-domain semantic search** via coordinate space traversal
 - **Temporal decay modeling** through STM→LTM promotion cycles
@@ -86,24 +88,23 @@ spatial_context = memory.get_spatial_context(
 - Automatic promotion to LTM on buffer overflow
 
 ### Layer 2: Semantic Depth (LTM - Long-Term Memory)
-**Persistent semantic clustering in 9D coordinate space**
+**Persistent semantic clustering in 6D coordinate space**
 
-- Direct semantic matches via coordinate-based lookup
-- Neighbor traversal in semantic space (associative recall)
-- LMDB storage with spatial indexing
+- Direct semantic matches via FAISS vector search (`IndexIDMap + IndexFlatL2`)
+- Payload storage in LMDB (JSON, keyed by integer ID)
 - Automatic cross-memory linking via proximity thresholds
+- SCM anchors stored here alongside regular memories — single unified store
 - Survives process termination
 
 ### Layer 3: Spatial Comprehension (SCM - Spatial Comprehension Map)
-**Location-indexed episodic memory with metadata**
+**Temporal continuity framework — navigable anchor graph backed by LTM**
 
-- **Spatial anchoring**: Links memories to multi-dimensional coordinates
+- **Anchor nodes**: Permanent fixtures (locations, book chapters, events) with stable 6D `node_pos` computed from their label using the same NLTK engine
+- **Structural graph**: Bidirectional `linked_anchors` edges (Chapter 1 → Chapter 2, Kitchen → Living Room)
 - **Visit tracking**: Frequency counting for access pattern analysis
 - **Valence scoring**: Aggregated sentiment weighting per anchor
-- **Entity tagging**: Concept presence at coordinate locations
-- **Cluster hierarchy**: Organizational grouping of related spaces
-- **Adjacency mapping**: Neighbor relationships between anchors
-- **LMDB persistence**: Survives restarts
+- **Entity tagging**: Concept presence at anchor nodes
+- **FAISS-searchable**: Anchors live in LTM FAISS index alongside memories — one search surfaces both
 
 **Use case:** Any system requiring general long term recall - physical robots navigating space, AI agents in virtual environments, long document/codebase comprehension, or conceptual navigation through problem domains.
 
@@ -111,55 +112,45 @@ spatial_context = memory.get_spatial_context(
 
 ## How It Works
 
-### 9D Spatial Semantic Coordinates
+### 6D Spatial Semantic Coordinates
 
-Every piece of text is converted to a 9-dimensional coordinate where semantic similarity = spatial proximity:
+Every piece of text is converted to a 6-dimensional coordinate using NLTK WordNet + SentiWordNet — no ML training, fully deterministic, edge-platform ready:
 
 **Each dimension represents:**
-- **X:** Temporal (past/present/future)
-- **Y:** Emotional (positive/negative sentiment)
-- **Z:** Certainty (confident/uncertain)
-- **A:** Activity (active/passive)
-- **B:** Complexity (simple/sophisticated)
-- **C:** Structural (grammatical features)
-- **D:** Contextual (topic continuity)
-- **E:** Modal (questions, negations, subjectivity)
-- **F:** Coherence (semantic consistency)
+- **X:** Abstract/Mental ↔ Concrete/Physical (WordNet WUP similarity to anchor synsets)
+- **Y:** Valence/Sentiment (SentiWordNet `pos_score − neg_score`)
+- **Z:** Abstraction/Specificity (WordNet hypernym tree depth, normalized)
+- **A:** Event/Process ↔ Object/Substance (WordNet WUP similarity to anchor synsets)
+- **B:** Objectivity (SentiWordNet `obj_score`)
+- **C:** Breadth/Generality (count of WordNet hyponyms)
 
-**Result:** "This problem requires analytical reasoning" and "Complex logical deduction theorum" cluster together (high semantic similarity, both cognitive complexity). "Simple lookup operation" clusters in distant region (low similarity, trivial complexity).
+**Result:** "This problem requires analytical reasoning" and "complex logical deduction" cluster together (abstract, neutral valence, high specificity). "Simple chair" clusters far away (concrete, high objectivity, low breadth). Same text always produces the same coordinate — fully deterministic.
 
 ### Spatial Comprehension Map (SCM)
 
-SCM creates an **episodic indexing layer** by anchoring semantic memories to coordinate systems:
+SCM creates a **temporal continuity framework** — a navigable graph of persistent anchor nodes that memories cluster around:
 
 ```
-Conceptual Space: "Algorithm Problem Domain"
-  └─ Anchor (2,3,1): Graph algorithms
-       ├─ Visits: 89 queries
-       ├─ Valence: +0.87 (high success rate)
-       ├─ Linked memories: 7 STM entries
-       └─ Entities: [dijkstra, A*, shortest_path]
-  
-  └─ Anchor (5,7,1): Optimization problems
-       ├─ Visits: 34 queries
-       ├─ Valence: +0.62 (moderate success)
-       ├─ Linked memories: 4 STM entries
-       └─ Entities: [dynamic_programming, greedy, backtracking]
-  
-  └─ Anchor (1,1,1): Parsing/compilation
-       ├─ Visits: 143 queries
-       ├─ Valence: +0.91 (highly reliable domain)
-       ├─ Linked memories: 12 STM entries
-       └─ Entities: [lexer, parser, AST]
+Anchor graph (stored in LTM):
+
+  [Kitchen] ──linked_anchors──► [Living Room] ──► [Hallway]
+       │                              │
+       ▼                              ▼
+  memories that occurred        memories that occurred
+  in kitchen context            in living room context
+
+  [Chapter 1] ──► [Chapter 2] ──► [Chapter 3]
+       │
+  memories from chapter 1 surface when querying this anchor
 ```
 
-**Mathematical properties:**
-- **Anchor coordinates** can represent physical locations, conceptual problem spaces, or abstract state vectors
-- **Visit frequency** enables temporal pattern detection
-- **Valence aggregation** provides weighted success scoring
-- **Entity clustering** groups related concepts at coordinates
+**Properties:**
+- **Anchor `node_pos`** computed from the anchor's label using the same NLTK 6D engine — anchors live in the same semantic space as memories
+- **`linked_anchors`** graph edges are bidirectional — structural navigation, not semantic proximity
+- **One hop traversal** in `queryMemory` returns directly linked anchors as `anchor_chain` alongside direct results
+- **Visit frequency** and **valence aggregation** per anchor for episodic pattern tracking
 
-**Applications:** Physical robot navigation, virtual environment memory, problem domain expertise mapping, conversational context anchoring.
+**Applications:** Book/document navigation, robot spatial memory, NPC episodic memory, multi-session AI context anchoring.
 
 ### Powered by SentiWordNet
 
@@ -210,10 +201,10 @@ git clone https://github.com/YourUsername/AdvancedSemanticMemoryClustering.git
 cd AdvancedSemanticMemoryClustering
 
 # Install dependencies
-pip install nltk numpy lmdb
+pip install nltk numpy lmdb faiss-cpu pyspellchecker
 
 # Download NLTK data (one-time)
-python -c "import nltk; nltk.download('sentiwordnet'); nltk.download('wordnet')"
+python -c "import nltk; nltk.download('sentiwordnet'); nltk.download('wordnet'); nltk.download('averaged_perceptron_tagger'); nltk.download('punkt')"
 ```
 
 ---
@@ -229,14 +220,13 @@ python -c "import nltk; nltk.download('sentiwordnet'); nltk.download('wordnet')"
 
 **`add_experience(situation, response, thought="", objective="", action="", result="", spatial_anchor=None, metadata=None)`**
 - Store a situation-response pair in memory
-- Automatically generates 9D coordinates
-- Links to spatial location if `spatial_anchor` provided
+- Automatically generates 6D coordinates (no ML, deterministic)
+- `spatial_anchor` accepts an `int` LTM anchor ID (new) or the old dict format (backwards compatible — auto-created and cached)
 - Stores in STM, promotes to LTM when full
 
 **`get_context(query, layer1_count=6, layer2_count=6)`**
 - Retrieve layered context for a query
-- Returns Layer 1 (immediate) + Layer 2 (depth)
-- Total context items: layer1_count + layer2_count
+- Returns `layer1` (STM), `layer2` (LTM memories), `anchors` (LTM anchor nodes), `anchor_chain` (structurally adjacent anchors, one graph hop)
 
 **`get_spatial_context(structure_type, cluster_id, coordinates, max_memories=5)`**
 - Get spatial context for a specific location
@@ -304,11 +294,11 @@ spatial_anchor = {
 - **Context Relevance:** Three-layer retrieval prevents recency bias and missing spatial grounding
 
 ### Storage
-All memory structures are stored in `AdvancedSemanticMemoryClustering/MemoryStructures/`:
-- `STM/` - Short-term memory cache (JSON)
-- `LTM/ltm.lmdb` - Long-term memory database
-- `SCM/scm.lmdb` - Spatial Comprehension Map database
-- `SCM/scm_operations.log` - SCM operation logs
+All memory structures are stored in `V2/MemoryStructures/`:
+- `STM/stm.json` — Short-term memory (JSON, atomic writes, rolling window)
+- `LTM/data.mdb` + `LTM/lock.mdb` — Long-term memory LMDB (JSON payloads, keyed by integer ID)
+- LTM also hosts a FAISS index (`ltm.faiss`) for 6D vector search
+- SCM anchors are stored directly in LTM — no separate database
 
 ---
 
@@ -374,16 +364,16 @@ Traditional LLM applications rely solely on finite context windows. ASMC extends
 - **Retrieval:** Sub-millisecond for recent queries
 
 **Layer 2 (LTM):** Semantic persistence
-- **Algorithmic complexity:** O(log n) via LMDB spatial indexing
-- **Storage:** Disk (persistent)
-- **Retrieval:** 10-50ms for coordinate-based lookup
+- **Algorithmic complexity:** O(log n) via FAISS approximate nearest-neighbor (IndexFlatL2)
+- **Storage:** LMDB (payloads) + FAISS index (vectors)
+- **Retrieval:** 10-50ms for vector search + payload fetch
 - **Capacity:** Millions of memories
 
-**Layer 3 (SCM):** Spatial-temporal anchoring
-- **Algorithmic complexity:** O(1) for direct anchor lookup, O(k) for k neighbors
-- **Storage:** LMDB indexed by coordinate keys
-- **Retrieval:** 5-20ms for anchor context
-- **Enables:** "What happened last time at this location/concept/state?"
+**Layer 3 (SCM):** Anchor graph temporal continuity
+- **Algorithmic complexity:** O(1) for direct ID fetch (`fetchById`), O(k) for k-NN FAISS search
+- **Storage:** Co-resident in LTM (same LMDB + FAISS — distinguished by `metaDataTag.type == "scm_anchor"`)
+- **Retrieval:** 5-20ms for anchor context + one-hop graph traversal
+- **Enables:** "What anchor am I near, and what is structurally adjacent to it?"
 
 **Design goals:**
 1. **Semantic clustering** without supervised training (pure algorithmic)
@@ -615,6 +605,7 @@ print(f"✅ Imported {len(dataset['knowledge_entries'])} knowledge entries")
   - Claude 4.0 Sonnet: Advanced optimization and API development
   - Claude 4.0 Opus: Conceptual breakthroughs and testing
   - Claude 4.5 Sonnet: Architecture cleanup, NLTK integration, three-layer system, SCM implementation
+  - Claude Sonnet 4.6: V2 full rebuild — no-ML 6D NLTK engine, FAISS+LMDB LTM, SCM anchor graph, backwards-compatible API wrapper
 
 **Special Thanks:**
 - NLTK team for SentiWordNet integration (117k word sentiment lexicon)
