@@ -25,11 +25,9 @@ class memoryManager:
             self._scm.visitAnchor(anchor_id, valence)
             memory["metaDataTag"]["scm_anchor_id"] = anchor_id
 
-        self._stm.addMemory(memory)
-        if self._stm.count() > shortTermMemory.STM_MAX:
-            oldest = self._stm.pop_oldest()
-            if oldest:
-                self._ltm.addMemory(oldest)
+        to_promote = self._stm.addMemory(memory)
+        if to_promote:
+            self._ltm.addMemory(to_promote)
 
     def queryMemory(self, text: str, k: int = 10) -> dict:
         coord      = self._spatial._svc.computeSpatialValence(text)

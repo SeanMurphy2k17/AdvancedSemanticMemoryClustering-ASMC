@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import threading
 
 
 class shortTermMemory:
@@ -13,25 +14,36 @@ class shortTermMemory:
         self.stm_dir  = os.path.join(base, "MemoryStructures", "STM")
         self.stm_path = os.path.join(self.stm_dir, "stm.json")
         os.makedirs(self.stm_dir, exist_ok=True)
-        if not os.path.isfile(self.stm_path):
-            self._save({"entries": []})
-        print(f"initialized {self.__class__.__name__}")
+        self._lock         = threading.Lock()
+        self._ckpt_every   = 3
+        self._ckpt_counter = 0
+        self._entries      = []
+        if os.path.isfile(self.stm_path):
+            try:
+                with open(self.stm_path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded.get("entries"), list):
+                    self._entries = loaded["entries"]
+            except Exception:
+                self._entries = []
+        print(f"initialized {self.__class__.__name__} ({len(self._entries)} entries recovered)")
 
     # --- file helpers ---
 
     def _load(self) -> dict:
-        with open(self.stm_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
-            data = {"entries": []}
-        return data
+        return {"entries": list(self._entries)}
 
-    def _save(self, data: dict):
+    def _checkpoint(self):
         tmp = self.stm_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False,
+            json.dump({"entries": self._entries}, f, ensure_ascii=False,
                       default=lambda o: list(o) if isinstance(o, tuple) else o)
         os.replace(tmp, self.stm_path)
+
+    def _save(self, data: dict):
+        """Compatibility shim — updates in-memory entries and checkpoints immediately."""
+        self._entries = data.get("entries", [])
+        self._checkpoint()
 
     # --- geometry helpers ---
 
@@ -82,32 +94,39 @@ class shortTermMemory:
 
     # --- public API ---
 
-    def addMemory(self, memory: dict):
-        data    = self._load()
-        entries = data["entries"]
-        if entries:
-            memory["prevPos"] = entries[-1]["responsePos"]
-        memory["linkedMemories"] = self._build_linkages(memory, entries, self.STM_RADIUS)
-        entries.append(memory)
-        self._save(data)
+    def addMemory(self, memory: dict) -> dict:
+        """Add memory. Returns oldest entry to promote to LTM if over STM_MAX, else None."""
+        with self._lock:
+            if self._entries:
+                memory["prevPos"] = self._entries[-1]["responsePos"]
+            memory["linkedMemories"] = self._build_linkages(memory, self._entries, self.STM_RADIUS)
+            self._entries.append(memory)
+            self._ckpt_counter += 1
+            if self._ckpt_counter >= self._ckpt_every:
+                self._checkpoint()
+                self._ckpt_counter = 0
+            if len(self._entries) > self.STM_MAX:
+                return self._entries.pop(0)
+            return None
 
     def count(self) -> int:
-        return len(self._load()["entries"])
+        with self._lock:
+            return len(self._entries)
 
     def pop_oldest(self) -> dict:
-        data    = self._load()
-        entries = data["entries"]
-        if not entries:
-            return None
-        oldest = entries.pop(0)
-        self._save(data)
-        return oldest
+        with self._lock:
+            if not self._entries:
+                return None
+            oldest = self._entries.pop(0)
+            self._checkpoint()
+            return oldest
 
     def queryMemory(self, coord, radius=None) -> list:
         p = self._parse_6d(coord)
         if p is None:
             return []
-        entries = self._load()["entries"]
+        with self._lock:
+            entries = list(self._entries)
         if radius is not None:
             return self._nearby(entries, p, radius)
         for r in (0.1, 0.2, 0.3, 0.5):
