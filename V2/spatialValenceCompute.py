@@ -75,6 +75,8 @@ class spatialValenceCompute:
         return min(1.0, len(synset.hyponyms()) / MAX_BREADTH)
 
     def _hypernym_chain(self, synset) -> list:
+        if synset is None:
+            return []
         chain   = [(synset, 0)]
         current = [synset]
         visited = {synset}
