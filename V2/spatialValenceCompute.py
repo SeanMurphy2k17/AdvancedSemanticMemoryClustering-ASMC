@@ -84,10 +84,11 @@ class spatialValenceCompute:
             next_level = []
             for s in current:
                 for h in s.hypernyms():
-                    if h not in visited:
-                        chain.append((h, hop))
-                        next_level.append(h)
-                        visited.add(h)
+                    if h is None or h in visited:
+                        continue
+                    chain.append((h, hop))
+                    next_level.append(h)
+                    visited.add(h)
             current = next_level
             if not current:
                 break
