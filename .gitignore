@@ -1,9 +1,14 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
 
-MemoryStructures/LTM/
-MemoryStructures/STM/
-MemoryStructures/SCM/scm.lmdb/
-MemoryStructures/SCM/scm_operations.log
-imgui.ini
+# Runtime memory data — grows in production, not for version control
+V2/MemoryStructures/STM/stm.json
+V2/MemoryStructures/LTM/data.mdb
+V2/MemoryStructures/LTM/lock.mdb
+V2/MemoryStructures/LTM/asmc.faiss
+V2/MemoryStructures/LTM/counter.json
+
+# Word cache is pre-built and committed intentionally — do NOT ignore
+# V2/MemoryStructures/word_cache.lmdb/

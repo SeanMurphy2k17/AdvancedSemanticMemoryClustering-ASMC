@@ -37,7 +37,7 @@ class spatialValenceCompute:
         self._lemmatizer   = WordNetLemmatizer()
         self._spell        = SpellChecker()
         os.makedirs(_CACHE_DIR, exist_ok=True)
-        self._lmdb = lmdb.open(_CACHE_DIR, map_size=64 * 1024 * 1024,
+        self._lmdb = lmdb.open(_CACHE_DIR, map_size=128 * 1024 * 1024,
                                subdir=True, max_readers=4)
         nltk.word_tokenize("warmup")
         nltk.pos_tag(["warmup"])
