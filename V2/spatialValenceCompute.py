@@ -1,3 +1,5 @@
+import json
+import os
 import warnings
 import nltk
 warnings.filterwarnings("ignore", category=UserWarning, module="nltk")
@@ -23,12 +25,37 @@ _NOUN_OBJECT     = wn.synset('object.n.01')
 _VERB_ACT        = wn.synset('act.v.01')
 _VERB_EXIST      = wn.synset('exist.v.01')
 
+_CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "MemoryStructures", "word_cache.json")
+
 class spatialValenceCompute:
     def __init__(self):
-        print(f"initialized {self.__class__.__name__}")
-        self._domain_cache = {}
-        self._lemmatizer   = WordNetLemmatizer()
-        self._spell        = SpellChecker()
+        self._domain_cache  = {}
+        self._word_cache    = {}   # (lemma, pos) → (x,y,z,a,b,c,w)
+        self._cache_dirty   = 0
+        self._lemmatizer    = WordNetLemmatizer()
+        self._spell         = SpellChecker()
+        self._load_word_cache()
+        print(f"initialized {self.__class__.__name__} ({len(self._word_cache)} words cached)")
+
+    def _load_word_cache(self):
+        if not os.path.isfile(_CACHE_PATH):
+            return
+        try:
+            with open(_CACHE_PATH, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            self._word_cache = {tuple(k.split("\x00")): tuple(v) for k, v in raw.items()}
+        except Exception:
+            self._word_cache = {}
+
+    def _save_word_cache(self):
+        os.makedirs(os.path.dirname(_CACHE_PATH), exist_ok=True)
+        tmp = _CACHE_PATH + ".tmp"
+        raw = {"\x00".join(k): list(v) for k, v in self._word_cache.items()}
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(raw, f)
+        os.replace(tmp, _CACHE_PATH)
+        self._cache_dirty = 0
 
     def _map_pos(self, treebank_tag: str):
         if treebank_tag.startswith('J'): return wn.ADJ
@@ -124,17 +151,33 @@ class spatialValenceCompute:
             if not synsets:
                 continue
 
-            chain = self._hypernym_chain(synsets[0])
+            cache_key = (lemma, wn_pos)
+            if cache_key in self._word_cache:
+                wx, wy, wz, wa, wb, wc, ww = self._word_cache[cache_key]
+            else:
+                chain = self._hypernym_chain(synsets[0])
+                wx = wy = wz = wa = wb = wc = ww = 0.0
+                for ancestor, hop in chain:
+                    w   = DECAY ** hop
+                    wx += self._domain_x(ancestor) * w
+                    wy += self._swn_valence(ancestor) * w
+                    wz += ancestor.min_depth() * w
+                    wa += self._event_a(ancestor) * w
+                    wb += self._objectivity_b(ancestor) * w
+                    wc += self._hyponym_c(ancestor) * w
+                    ww += w
+                self._word_cache[cache_key] = (wx, wy, wz, wa, wb, wc, ww)
+                self._cache_dirty += 1
+                if self._cache_dirty >= 50:
+                    self._save_word_cache()
 
-            for ancestor, hop in chain:
-                w       = DECAY ** hop
-                x_acc  += self._domain_x(ancestor) * w
-                y_acc  += self._swn_valence(ancestor) * w
-                z_acc  += ancestor.min_depth() * w
-                a_acc  += self._event_a(ancestor) * w
-                b_acc  += self._objectivity_b(ancestor) * w
-                c_acc  += self._hyponym_c(ancestor) * w
-                w_total += w
+            x_acc  += wx
+            y_acc  += wy
+            z_acc  += wz
+            a_acc  += wa
+            b_acc  += wb
+            c_acc  += wc
+            w_total += ww
 
         if w_total == 0.0:
             return (0.0,) * 6
