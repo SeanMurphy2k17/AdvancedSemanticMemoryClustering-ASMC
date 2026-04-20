@@ -114,53 +114,50 @@ class spatialValenceCompute:
         x_acc = y_acc = z_acc = a_acc = b_acc = c_acc = w_total = 0.0
 
         for word, tag in pos_tags:
+            if not word.isalpha():
+                continue
             wn_pos = self._map_pos(tag)
             if wn_pos is None:
                 continue
-            lemma   = self._lemmatizer.lemmatize(word, pos=wn_pos)
-            synsets = wn.synsets(lemma, pos=wn_pos)
-            if not synsets and wn_pos == wn.ADJ:
-                synsets = wn.synsets(lemma, pos=wn.ADJ_SAT)
-            if not synsets:
-                for fb_pos in [wn.NOUN, wn.VERB, wn.ADJ, wn.ADJ_SAT, wn.ADV]:
-                    if fb_pos == wn_pos: continue
-                    fb_lemma = self._lemmatizer.lemmatize(word, pos=fb_pos)
-                    synsets  = wn.synsets(fb_lemma, pos=fb_pos)
-                    if synsets: break
-            if not synsets:
-                corrected = self._spell.correction(word)
-                if corrected and corrected != word:
-                    for fb_pos in [wn.NOUN, wn.VERB, wn.ADJ, wn.ADJ_SAT, wn.ADV]:
-                        fb_lemma = self._lemmatizer.lemmatize(corrected, pos=fb_pos)
-                        synsets  = wn.synsets(fb_lemma, pos=fb_pos)
-                        if synsets: break
-            if not synsets:
-                continue
-
+            lemma     = self._lemmatizer.lemmatize(word, pos=wn_pos)
             cache_key = (lemma, wn_pos)
             if cache_key in self._word_cache:
                 wx, wy, wz, wa, wb, wc, ww = self._word_cache[cache_key]
             else:
                 db_key = f"{lemma}\x00{wn_pos}".encode()
                 with self._lmdb.begin() as txn:
-                    raw = txn.get(db_key)
+                    raw = txn.get(db_key) or txn.get(f"{lemma}\x00n".encode())
                 if raw:
                     vals = struct.unpack(_PACK_FMT, raw)
                 else:
-                    chain = self._hypernym_chain(synsets[0])
-                    wx = wy = wz = wa = wb = wc = ww = 0.0
-                    for ancestor, hop in chain:
-                        w   = DECAY ** hop
-                        wx += self._domain_x(ancestor) * w
-                        wy += self._swn_valence(ancestor) * w
-                        wz += ancestor.min_depth() * w
-                        wa += self._event_a(ancestor) * w
-                        wb += self._objectivity_b(ancestor) * w
-                        wc += self._hyponym_c(ancestor) * w
-                        ww += w
-                    vals = (wx, wy, wz, wa, wb, wc, ww)
-                    with self._lmdb.begin(write=True) as txn:
-                        txn.put(db_key, struct.pack(_PACK_FMT, *vals))
+                    # LMDB miss — fall back to WordNet computation
+                    try:
+                        synsets = wn.synsets(lemma, pos=wn_pos)
+                        if not synsets and wn_pos == wn.ADJ:
+                            synsets = wn.synsets(lemma, pos=wn.ADJ_SAT)
+                        if not synsets:
+                            for fb_pos in [wn.NOUN, wn.VERB, wn.ADJ, wn.ADJ_SAT, wn.ADV]:
+                                if fb_pos == wn_pos: continue
+                                synsets = wn.synsets(self._lemmatizer.lemmatize(word, pos=fb_pos), pos=fb_pos)
+                                if synsets: break
+                        if not synsets:
+                            continue
+                        chain = self._hypernym_chain(synsets[0])
+                        wx = wy = wz = wa = wb = wc = ww = 0.0
+                        for ancestor, hop in chain:
+                            w   = DECAY ** hop
+                            wx += self._domain_x(ancestor) * w
+                            wy += self._swn_valence(ancestor) * w
+                            wz += ancestor.min_depth() * w
+                            wa += self._event_a(ancestor) * w
+                            wb += self._objectivity_b(ancestor) * w
+                            wc += self._hyponym_c(ancestor) * w
+                            ww += w
+                        vals = (wx, wy, wz, wa, wb, wc, ww)
+                        with self._lmdb.begin(write=True) as txn:
+                            txn.put(db_key, struct.pack(_PACK_FMT, *vals))
+                    except Exception:
+                        continue
                 self._word_cache[cache_key] = vals
                 wx, wy, wz, wa, wb, wc, ww = vals
 

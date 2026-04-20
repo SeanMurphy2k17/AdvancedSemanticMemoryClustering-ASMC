@@ -30,9 +30,17 @@ class memoryManager:
             self._ltm.addMemory(to_promote)
 
     def queryMemory(self, text: str, k: int = 10) -> dict:
+        import time as _t
+        _t0 = _t.perf_counter()
+        print(f"[MEMORY QUERY] Step 1: converting query ({len(text.split())} words) to coordinates...", flush=True)
         coord      = self._spatial._svc.computeSpatialValence(text)
+        print(f"[MEMORY QUERY] Step 2: searching recent memory... (step 1 took {_t.perf_counter()-_t0:.2f}s)", flush=True)
+        _t1 = _t.perf_counter()
         stm_result = self._stm.queryMemory(coord)
+        print(f"[MEMORY QUERY] Step 3: searching long-term memory... (step 2 took {_t.perf_counter()-_t1:.2f}s)", flush=True)
+        _t2 = _t.perf_counter()
         ltm_result = self._ltm.queryMemory(coord, k=k)
+        print(f"[MEMORY QUERY] done. Total query time: {_t.perf_counter()-_t0:.2f}s", flush=True)
 
         memories = [m for m in ltm_result["direct"] if not self._scm.isAnchor(m)]
         anchors  = [m for m in ltm_result["direct"] if self._scm.isAnchor(m)]

@@ -95,7 +95,7 @@ class AdvancedSemanticMemory:
                     layer2_count: int = 6, complexity: int = 5) -> dict:
         """
         Retrieve layered context for a query.
-
+            
         Returns:
             layer1        — STM results (recent + semantically close)
             layer2        — LTM memory results (semantic FAISS search)
@@ -186,7 +186,7 @@ class AdvancedSemanticMemory:
                 nm = n["metaDataTag"]
                 lines.append(f"  → {n['inputText']}  [{nm['cluster_id']}]")
         return "\n".join(lines)
-
+    
     def create_anchor(self, cluster_id: str, coords: dict,
                       location_type: str = "", entities: list = None,
                       prev_anchor_id: int = None) -> int:
@@ -212,7 +212,7 @@ class AdvancedSemanticMemory:
         self._mm._ltm._clear()
         self._anchor_cache.clear()
         return {"success": True, "cleared": {"stm": True, "ltm": True}}
-
+    
     def shutdown(self):
         pass  # LMDB environments close automatically on GC
 
