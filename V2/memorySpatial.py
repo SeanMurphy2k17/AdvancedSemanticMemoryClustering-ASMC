@@ -15,6 +15,7 @@ class memorySpatial:
             "inputPos":        self._svc.computeSpatialValence(inputText),
             "responseText":    responseText,
             "responsePos":     self._svc.computeSpatialValence(responseText),
+            "contentWords":    self._svc.extractContentWords(inputText),
             "prevPos":         prevPos,
             "linkedMemories":  linkedMemories or [],
             "metaDataTag":     metaDataTag or {},

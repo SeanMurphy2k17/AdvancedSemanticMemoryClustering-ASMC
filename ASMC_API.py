@@ -104,12 +104,13 @@ class AdvancedSemanticMemory:
         """
         result = self._mm.queryMemory(query, k=layer2_count)
         return {
-            "query":        query,
-            "layer1":       result["stm"],
-            "layer2":       result["ltm_memories"],
-            "layer2_chain": result["ltm_chain"],
-            "anchors":      result["ltm_anchors"],
-            "anchor_chain": result["anchor_chain"],
+            "query":          query,
+            "layer1":         result["stm"],
+            "layer2":         result["ltm_memories"],
+            "layer2_chain":   result["ltm_chain"],
+            "semantic_chain": result["ltm_semantic"],
+            "anchors":        result["ltm_anchors"],
+            "anchor_chain":   result["anchor_chain"],
         }
 
     def get_raw_entries(self, n: int = None, metadata_filter: dict = None) -> list:

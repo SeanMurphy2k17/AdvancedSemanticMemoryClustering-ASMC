@@ -45,6 +45,10 @@ class memoryManager:
         memories = [m for m in ltm_result["direct"] if not self._scm.isAnchor(m)]
         anchors  = [m for m in ltm_result["direct"] if self._scm.isAnchor(m)]
         chain    = [m for m in ltm_result["chain"]  if not self._scm.isAnchor(m)]
+        query_words   = self._spatial._svc.extractContentWords(text)
+        semantic_raw  = self._ltm.semanticTraverse(
+            ltm_result["direct"], query_words, self._spatial._svc.extractContentWords)
+        semantic      = [m for m in semantic_raw if not self._scm.isAnchor(m)]
 
         # traverse anchor graph — one hop from each found anchor
         anchor_chain = []
@@ -63,6 +67,7 @@ class memoryManager:
             "stm":          stm_result,
             "ltm_memories": memories,
             "ltm_chain":    chain,
+            "ltm_semantic": semantic,
             "ltm_anchors":  anchors,
             "anchor_chain": anchor_chain,
         }
@@ -183,6 +188,9 @@ if __name__ == "__main__":
         print(f"  LTM chain ({len(result['ltm_chain'])}):")
         for m in result["ltm_chain"]:
             print(f"    ~ {m['inputText']}")
+        print(f"  LTM semantic ({len(result['ltm_semantic'])}):")
+        for m in result["ltm_semantic"]:
+            print(f"    * {m['inputText']}")
         print(f"  LTM anchors ({len(result['ltm_anchors'])}):")
         for a in result["ltm_anchors"]:
             meta = a["metaDataTag"]

@@ -182,6 +182,21 @@ class spatialValenceCompute:
 
         return (x, y, z, a, b, c)
 
+    def extractContentWords(self, text: str) -> list:
+        tokens   = nltk.word_tokenize(text.lower())
+        pos_tags = nltk.pos_tag(tokens)
+        words = []
+        for word, tag in pos_tags:
+            if not word.isalpha():
+                continue
+            wn_pos = self._map_pos(tag)
+            if wn_pos is None:
+                continue
+            lemma = self._lemmatizer.lemmatize(word, pos=wn_pos)
+            if lemma not in words:
+                words.append(lemma)
+        return words
+
 
 if __name__ == "__main__":
     PHRASES = [

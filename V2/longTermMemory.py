@@ -109,6 +109,41 @@ class longTermMemory:
 
         return {"direct": direct, "chain": chain}
 
+    def semanticTraverse(self, start_memories: list, query_words: list,
+                         extract_fn, max_results: int = 8, max_nodes: int = 20) -> list:
+        bucket      = []
+        bucket_keys = set()
+        visited     = set()
+        queue       = list(start_memories)
+        query_set   = set(query_words)
+        nodes_seen  = 0
+        while queue and len(bucket) < max_results and nodes_seen < max_nodes:
+            mem = queue.pop(0)
+            nodes_seen += 1
+            cw  = mem.get("contentWords") or extract_fn(mem.get("inputText", ""))
+            key = mem.get("inputText", "") + mem.get("timeDate", "")
+            if (query_set & set(cw)) and key not in bucket_keys:
+                bucket.append(mem)
+                bucket_keys.add(key)
+            prev_pos = mem.get("prevPos")
+            if prev_pos:
+                _, pI = self._index.search(self._encode(prev_pos), 1)
+                pid = int(pI[0][0])
+                if pid != -1 and pid not in visited:
+                    visited.add(pid)
+                    n = self.fetchById(pid)
+                    if n:
+                        queue.append(n)
+            for lp in mem.get("linkedMemories", []):
+                _, lI = self._index.search(self._encode(lp), 1)
+                lid = int(lI[0][0])
+                if lid != -1 and lid not in visited:
+                    visited.add(lid)
+                    n = self.fetchById(lid)
+                    if n:
+                        queue.append(n)
+        return bucket
+
     def _clear(self):
         with self._env.begin(write=True) as txn:
             txn.drop(self._env.open_db(), delete=False)
