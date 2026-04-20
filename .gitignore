@@ -10,5 +10,5 @@ V2/MemoryStructures/LTM/lock.mdb
 V2/MemoryStructures/LTM/asmc.faiss
 V2/MemoryStructures/LTM/counter.json
 
-# Word cache is pre-built and committed intentionally — do NOT ignore
-# V2/MemoryStructures/word_cache.lmdb/
+# Word cache — machine-generated, each device builds its own via pre-warmer
+V2/MemoryStructures/word_cache.lmdb/
