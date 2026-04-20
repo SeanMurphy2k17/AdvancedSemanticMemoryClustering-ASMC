@@ -99,7 +99,12 @@ class shortTermMemory:
         with self._lock:
             if self._entries:
                 memory["prevPos"] = self._entries[-1]["responsePos"]
-            memory["linkedMemories"] = self._build_linkages(memory, self._entries, self.STM_RADIUS)
+            links = []
+            for r in (self.STM_RADIUS, 0.15, 0.25, 0.40):
+                links = self._build_linkages(memory, self._entries, r)
+                if links:
+                    break
+            memory["linkedMemories"] = links
             self._entries.append(memory)
             self._ckpt_counter += 1
             if self._ckpt_counter >= self._ckpt_every:
