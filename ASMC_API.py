@@ -107,6 +107,7 @@ class AdvancedSemanticMemory:
             "query":        query,
             "layer1":       result["stm"],
             "layer2":       result["ltm_memories"],
+            "layer2_chain": result["ltm_chain"],
             "anchors":      result["ltm_anchors"],
             "anchor_chain": result["anchor_chain"],
         }

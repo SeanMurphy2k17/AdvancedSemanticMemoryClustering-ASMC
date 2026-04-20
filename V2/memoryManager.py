@@ -44,6 +44,7 @@ class memoryManager:
 
         memories = [m for m in ltm_result["direct"] if not self._scm.isAnchor(m)]
         anchors  = [m for m in ltm_result["direct"] if self._scm.isAnchor(m)]
+        chain    = [m for m in ltm_result["chain"]  if not self._scm.isAnchor(m)]
 
         # traverse anchor graph — one hop from each found anchor
         anchor_chain = []
@@ -61,6 +62,7 @@ class memoryManager:
         return {
             "stm":          stm_result,
             "ltm_memories": memories,
+            "ltm_chain":    chain,
             "ltm_anchors":  anchors,
             "anchor_chain": anchor_chain,
         }
@@ -178,6 +180,9 @@ if __name__ == "__main__":
         print(f"  LTM memories ({len(result['ltm_memories'])}):")
         for m in result["ltm_memories"]:
             print(f"    - {m['inputText']}")
+        print(f"  LTM chain ({len(result['ltm_chain'])}):")
+        for m in result["ltm_chain"]:
+            print(f"    ~ {m['inputText']}")
         print(f"  LTM anchors ({len(result['ltm_anchors'])}):")
         for a in result["ltm_anchors"]:
             meta = a["metaDataTag"]

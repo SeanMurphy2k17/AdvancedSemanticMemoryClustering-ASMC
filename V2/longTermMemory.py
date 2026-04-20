@@ -96,6 +96,16 @@ class longTermMemory:
                     if raw:
                         chain.append(json.loads(raw))
                         seen_ids.add(linked_id)
+                prev_pos = mem.get("prevPos")
+                if prev_pos:
+                    pq = self._encode(prev_pos)
+                    _, pI = self._index.search(pq, 1)
+                    prev_id = int(pI[0][0])
+                    if prev_id != -1 and prev_id not in seen_ids:
+                        raw = txn.get(str(prev_id).encode())
+                        if raw:
+                            chain.append(json.loads(raw))
+                            seen_ids.add(prev_id)
 
         return {"direct": direct, "chain": chain}
 
