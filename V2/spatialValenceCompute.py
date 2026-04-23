@@ -172,7 +172,7 @@ class spatialValenceCompute:
         if w_total == 0.0:
             return (0.0,) * 6
 
-        r = lambda v: round(max(-1.0, min(1.0, v)), 2)
+        r = lambda v: round(max(-1.0, min(1.0, v)), 6)
         x = r( x_acc / w_total)
         y = r( y_acc / w_total)
         z = r((z_acc / w_total) / MAX_DEPTH * 2.0 - 1.0)
