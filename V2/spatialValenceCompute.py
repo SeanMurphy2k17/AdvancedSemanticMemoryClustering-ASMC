@@ -29,6 +29,13 @@ _CACHE_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "MemoryStructures", "word_cache.lmdb")
 _PACK_FMT   = "7d"   # 7 doubles = 56 bytes per entry
 
+_CERTAIN_MODALS   = {'must', 'will', 'shall'}
+_UNCERTAIN_MODALS = {'might', 'may', 'could', 'would', 'should'}
+_NEGATIONS        = {'not', 'no', 'never', 'neither', 'nor', 'nothing',
+                     'nobody', 'nowhere', 'hardly', 'barely', 'scarcely'}
+_INTENTION        = {'will', 'shall', 'want', 'plan', 'intend',
+                     'going', 'wish', 'hope', 'aim', 'expect'}
+
 class spatialValenceCompute:
     def __init__(self):
         import lmdb
@@ -196,6 +203,46 @@ class spatialValenceCompute:
             if lemma not in words:
                 words.append(lemma)
         return words
+
+    def computeSyntacticVector(self, text: str) -> tuple:
+        tokens   = nltk.word_tokenize(text.lower())
+        pos_tags = nltk.pos_tag(tokens)
+        words    = [w for w in tokens if w.isalpha()]
+        n        = max(len(words), 1)
+        r        = lambda v: round(max(-1.0, min(1.0, v)), 6)
+
+        # D — Tense: past(-1) ↔ future(+1)
+        past_v   = sum(1 for _, t in pos_tags if t == 'VBD')
+        future_v = sum(1 for w, t in pos_tags if t == 'MD' and w in {'will', 'shall'})
+        total_v  = max(sum(1 for _, t in pos_tags if t.startswith('VB')), 1)
+        tense    = r((future_v - past_v) / total_v)
+
+        # E — Certainty: uncertain(-1) ↔ certain(+1)
+        certain   = sum(1 for w, t in pos_tags if t == 'MD' and w in _CERTAIN_MODALS)
+        uncertain = sum(1 for w, t in pos_tags if t == 'MD' and w in _UNCERTAIN_MODALS)
+        has_q     = 1 if '?' in text else 0
+        tot_mod   = max(certain + uncertain, 1)
+        certainty = r((certain - uncertain) / tot_mod - has_q * 0.5)
+
+        # F — Negation: negated(-1) ↔ affirmative(+1)
+        neg_count = sum(1 for w in words if w in _NEGATIONS)
+        negation  = r(1.0 - 2.0 * neg_count / n)
+
+        # G — Complexity: simple(-1) ↔ complex(+1)  via type-token ratio
+        complexity = r(2.0 * len(set(words)) / n - 1.0)
+
+        # H — Structure: fragment(-1) ↔ full S+V+O(+1)
+        has_n  = any(t.startswith('NN') for _, t in pos_tags)
+        has_v  = any(t.startswith('VB') for _, t in pos_tags)
+        has_o  = sum(1 for _, t in pos_tags if t.startswith('NN')) > 1
+        structure = r((int(has_n) + int(has_v) + int(has_o)) / 3.0 * 2.0 - 1.0)
+
+        # I — Volition: descriptive(-1) ↔ imperative/intentional(+1)
+        intention  = sum(1 for w in words if w in _INTENTION) / n
+        imperative = 1.0 if (pos_tags and pos_tags[0][1] == 'VB') else 0.0
+        volition   = r(intention + imperative * 0.5)
+
+        return (tense, certainty, negation, complexity, structure, volition)
 
 
 if __name__ == "__main__":

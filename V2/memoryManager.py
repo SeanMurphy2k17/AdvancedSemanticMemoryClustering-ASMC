@@ -39,7 +39,8 @@ class memoryManager:
         stm_result = self._stm.queryMemory(coord)
         print(f"[MEMORY QUERY] Step 3: searching long-term memory... (step 2 took {_t.perf_counter()-_t1:.2f}s)", flush=True)
         _t2 = _t.perf_counter()
-        ltm_result = self._ltm.queryMemory(coord, k=k)
+        ltm_result = self._ltm.queryMemory(coord, k=k,
+                         syn_coord=self._spatial._svc.computeSyntacticVector(text))
         print(f"[MEMORY QUERY] done. Total query time: {_t.perf_counter()-_t0:.2f}s", flush=True)
 
         memories = [m for m in ltm_result["direct"] if not self._scm.isAnchor(m)]

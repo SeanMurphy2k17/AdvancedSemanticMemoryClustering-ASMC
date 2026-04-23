@@ -69,21 +69,42 @@ class longTermMemory:
         with self._env.begin(write=True) as txn:
             txn.put(str(ltm_id).encode(), payload)
 
-    def queryMemory(self, inputCoord, k: int = 10) -> dict:
-        q = self._encode(inputCoord)
-        D, I = self._index.search(q, k)
+    def _syn_rerank(self, candidates: list, syn_coord: tuple,
+                    boost: float = 0.4) -> list:
+        q = np.array(syn_coord, dtype=np.float32)
+        scored = []
+        for sem_dist, mem in candidates:
+            syn_pos = mem.get("syntacticPos")
+            if syn_pos:
+                diff     = np.array(syn_pos, dtype=np.float32) - q
+                syn_dist = float(np.dot(diff, diff))
+            else:
+                syn_dist = 0.0
+            scored.append((sem_dist + boost * syn_dist, mem))
+        scored.sort(key=lambda x: x[0])
+        return scored
 
-        direct = []
+    def queryMemory(self, inputCoord, k: int = 10, syn_coord=None) -> dict:
+        q        = self._encode(inputCoord)
+        search_k = min(k * 4, max(self._index.ntotal, 1))
+        D, I     = self._index.search(q, search_k)
+
+        candidates = []
         with self._env.begin() as txn:
-            for mem_id in I[0]:
+            for dist, mem_id in zip(D[0], I[0]):
                 if mem_id == -1:
                     continue
                 raw = txn.get(str(mem_id).encode())
                 if raw:
-                    direct.append(json.loads(raw))
+                    candidates.append((float(dist), json.loads(raw)))
+
+        if syn_coord and candidates:
+            candidates = self._syn_rerank(candidates, syn_coord)
+
+        direct   = [m for _, m in candidates[:k]]
+        seen_ids = set(int(i) for i in I[0] if i != -1)
 
         chain = []
-        seen_ids = set(int(i) for i in I[0] if i != -1)
         with self._env.begin() as txn:
             for mem in direct:
                 for linked_pos in mem.get("linkedMemories", []):
