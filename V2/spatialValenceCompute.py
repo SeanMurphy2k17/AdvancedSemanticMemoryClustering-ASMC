@@ -27,14 +27,38 @@ _VERB_EXIST      = wn.synset('exist.v.01')
 
 _CACHE_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "MemoryStructures", "word_cache.lmdb")
-_PACK_FMT   = "7d"   # 7 doubles = 56 bytes per entry
+_PACK_FMT   = "13d"  # 13 doubles = 104 bytes (6+6 accumulators + shared weight)
 
-_CERTAIN_MODALS   = {'must', 'will', 'shall'}
-_UNCERTAIN_MODALS = {'might', 'may', 'could', 'would', 'should'}
-_NEGATIONS        = {'not', 'no', 'never', 'neither', 'nor', 'nothing',
-                     'nobody', 'nowhere', 'hardly', 'barely', 'scarcely'}
-_INTENTION        = {'will', 'shall', 'want', 'plan', 'intend',
-                     'going', 'wish', 'hope', 'aim', 'expect'}
+# Second 6D anchors — world model layer
+# D: living/organic ↔ artificial/made
+_NOUN_LIVING   = wn.synset('living_thing.n.01')
+_NOUN_ARTIFACT = wn.synset('artifact.n.01')
+_VERB_GROW     = wn.synset('grow.v.01')
+_VERB_BUILD    = wn.synset('build.v.01')
+# E: spatial/location ↔ process/change
+_NOUN_LOCATION = wn.synset('location.n.01')
+_NOUN_PROCESS  = wn.synset('process.n.06')
+_VERB_TRAVEL   = wn.synset('travel.v.01')
+_VERB_CHANGE   = wn.synset('change.v.01')
+# F: communicative/information ↔ material/substance
+_NOUN_COMMS    = wn.synset('communication.n.02')
+_NOUN_MATTER   = wn.synset('substance.n.01')
+_VERB_SPEAK    = wn.synset('communicate.v.01')
+_VERB_CREATE   = wn.synset('create.v.02')
+# G: causal agent ↔ phenomenon
+_NOUN_AGENT    = wn.synset('causal_agent.n.01')
+_NOUN_PHENOM   = wn.synset('phenomenon.n.01')
+_VERB_CAUSE    = wn.synset('cause.v.01')
+_VERB_HAPPEN   = wn.synset('happen.v.01')
+# H: cognitive/mental ↔ attribute/property
+_NOUN_COGNIT   = wn.synset('cognition.n.01')
+_NOUN_ATTRIB   = wn.synset('attribute.n.01')
+_VERB_KNOW     = wn.synset('know.v.01')
+_VERB_HAVE     = wn.synset('have.v.01')
+# I: relational ↔ standalone object
+_NOUN_RELATION = wn.synset('relation.n.01')
+_VERB_RELATE   = wn.synset('relate.v.01')
+_VERB_USE      = wn.synset('use.v.01')
 
 class spatialValenceCompute:
     def __init__(self):
@@ -94,6 +118,24 @@ class spatialValenceCompute:
     def _hyponym_c(self, synset) -> float:
         return min(1.0, len(synset.hyponyms()) / MAX_BREADTH)
 
+    def _living_d(self, s)  -> float:
+        return self._wup_axis(s, _NOUN_LIVING,   _NOUN_ARTIFACT, _VERB_GROW,   _VERB_BUILD,  'd')
+
+    def _spatial_e(self, s) -> float:
+        return self._wup_axis(s, _NOUN_LOCATION, _NOUN_PROCESS,  _VERB_TRAVEL, _VERB_CHANGE, 'e')
+
+    def _comms_f(self, s)   -> float:
+        return self._wup_axis(s, _NOUN_COMMS,    _NOUN_MATTER,   _VERB_SPEAK,  _VERB_CREATE, 'f')
+
+    def _agent_g(self, s)   -> float:
+        return self._wup_axis(s, _NOUN_AGENT,    _NOUN_PHENOM,   _VERB_CAUSE,  _VERB_HAPPEN, 'g')
+
+    def _cognit_h(self, s)  -> float:
+        return self._wup_axis(s, _NOUN_COGNIT,   _NOUN_ATTRIB,   _VERB_KNOW,   _VERB_HAVE,   'h')
+
+    def _relate_i(self, s)  -> float:
+        return self._wup_axis(s, _NOUN_RELATION, _NOUN_OBJECT,   _VERB_RELATE, _VERB_USE,    'i')
+
     def _hypernym_chain(self, synset) -> list:
         if synset is None:
             return []
@@ -129,12 +171,12 @@ class spatialValenceCompute:
             lemma     = self._lemmatizer.lemmatize(word, pos=wn_pos)
             cache_key = (lemma, wn_pos)
             if cache_key in self._word_cache:
-                wx, wy, wz, wa, wb, wc, ww = self._word_cache[cache_key]
+                wx, wy, wz, wa, wb, wc, wj, wk, wl, wm, wn_, wo, ww = self._word_cache[cache_key]
             else:
                 db_key = f"{lemma}\x00{wn_pos}".encode()
                 with self._lmdb.begin() as txn:
                     raw = txn.get(db_key) or txn.get(f"{lemma}\x00n".encode())
-                if raw:
+                if raw and len(raw) == struct.calcsize(_PACK_FMT):
                     vals = struct.unpack(_PACK_FMT, raw)
                 else:
                     # LMDB miss — fall back to WordNet computation
@@ -150,7 +192,7 @@ class spatialValenceCompute:
                         if not synsets:
                             continue
                         chain = self._hypernym_chain(synsets[0])
-                        wx = wy = wz = wa = wb = wc = ww = 0.0
+                        wx = wy = wz = wa = wb = wc = wj = wk = wl = wm = wn_ = wo = ww = 0.0
                         for ancestor, hop in chain:
                             w   = DECAY ** hop
                             wx += self._domain_x(ancestor) * w
@@ -159,14 +201,20 @@ class spatialValenceCompute:
                             wa += self._event_a(ancestor) * w
                             wb += self._objectivity_b(ancestor) * w
                             wc += self._hyponym_c(ancestor) * w
+                            wj += self._living_d(ancestor) * w
+                            wk += self._spatial_e(ancestor) * w
+                            wl += self._comms_f(ancestor) * w
+                            wm += self._agent_g(ancestor) * w
+                            wn_ += self._cognit_h(ancestor) * w
+                            wo += self._relate_i(ancestor) * w
                             ww += w
-                        vals = (wx, wy, wz, wa, wb, wc, ww)
+                        vals = (wx, wy, wz, wa, wb, wc, wj, wk, wl, wm, wn_, wo, ww)
                         with self._lmdb.begin(write=True) as txn:
                             txn.put(db_key, struct.pack(_PACK_FMT, *vals))
                     except Exception:
                         continue
                 self._word_cache[cache_key] = vals
-                wx, wy, wz, wa, wb, wc, ww = vals
+                wx, wy, wz, wa, wb, wc, wj, wk, wl, wm, wn_, wo, ww = vals
 
             x_acc  += wx
             y_acc  += wy
@@ -204,45 +252,40 @@ class spatialValenceCompute:
                 words.append(lemma)
         return words
 
-    def computeSyntacticVector(self, text: str) -> tuple:
+    def computeWorldValence(self, text: str) -> tuple:
         tokens   = nltk.word_tokenize(text.lower())
         pos_tags = nltk.pos_tag(tokens)
-        words    = [w for w in tokens if w.isalpha()]
-        n        = max(len(words), 1)
-        r        = lambda v: round(max(-1.0, min(1.0, v)), 6)
-
-        # D — Tense: past(-1) ↔ future(+1)
-        past_v   = sum(1 for _, t in pos_tags if t == 'VBD')
-        future_v = sum(1 for w, t in pos_tags if t == 'MD' and w in {'will', 'shall'})
-        total_v  = max(sum(1 for _, t in pos_tags if t.startswith('VB')), 1)
-        tense    = r((future_v - past_v) / total_v)
-
-        # E — Certainty: uncertain(-1) ↔ certain(+1)
-        certain   = sum(1 for w, t in pos_tags if t == 'MD' and w in _CERTAIN_MODALS)
-        uncertain = sum(1 for w, t in pos_tags if t == 'MD' and w in _UNCERTAIN_MODALS)
-        has_q     = 1 if '?' in text else 0
-        tot_mod   = max(certain + uncertain, 1)
-        certainty = r((certain - uncertain) / tot_mod - has_q * 0.5)
-
-        # F — Negation: negated(-1) ↔ affirmative(+1)
-        neg_count = sum(1 for w in words if w in _NEGATIONS)
-        negation  = r(1.0 - 2.0 * neg_count / n)
-
-        # G — Complexity: simple(-1) ↔ complex(+1)  via type-token ratio
-        complexity = r(2.0 * len(set(words)) / n - 1.0)
-
-        # H — Structure: fragment(-1) ↔ full S+V+O(+1)
-        has_n  = any(t.startswith('NN') for _, t in pos_tags)
-        has_v  = any(t.startswith('VB') for _, t in pos_tags)
-        has_o  = sum(1 for _, t in pos_tags if t.startswith('NN')) > 1
-        structure = r((int(has_n) + int(has_v) + int(has_o)) / 3.0 * 2.0 - 1.0)
-
-        # I — Volition: descriptive(-1) ↔ imperative/intentional(+1)
-        intention  = sum(1 for w in words if w in _INTENTION) / n
-        imperative = 1.0 if (pos_tags and pos_tags[0][1] == 'VB') else 0.0
-        volition   = r(intention + imperative * 0.5)
-
-        return (tense, certainty, negation, complexity, structure, volition)
+        j_acc = k_acc = l_acc = m_acc = n_acc = o_acc = w_total = 0.0
+        r = lambda v: round(max(-1.0, min(1.0, v)), 6)
+        for word, tag in pos_tags:
+            if not word.isalpha():
+                continue
+            wn_pos = self._map_pos(tag)
+            if wn_pos is None:
+                continue
+            lemma     = self._lemmatizer.lemmatize(word, pos=wn_pos)
+            cache_key = (lemma, wn_pos)
+            if cache_key not in self._word_cache:
+                self.computeSpatialValence(word)
+            if cache_key not in self._word_cache:
+                continue
+            vals = self._word_cache[cache_key]
+            if len(vals) < 13:
+                continue
+            _, _, _, _, _, _, wj, wk, wl, wm, wn_, wo, ww = vals
+            j_acc   += wj;  k_acc += wk;  l_acc += wl
+            m_acc   += wm;  n_acc += wn_; o_acc += wo
+            w_total += ww
+        if w_total == 0.0:
+            return (0.0,) * 6
+        return (
+            r(j_acc / w_total),   # D: living vs artifact
+            r(k_acc / w_total),   # E: spatial vs process
+            r(l_acc / w_total),   # F: communicative vs material
+            r(m_acc / w_total),   # G: agent vs phenomenon
+            r(n_acc / w_total),   # H: cognitive vs attribute
+            r(o_acc / w_total),   # I: relational vs object
+        )
 
 
 if __name__ == "__main__":

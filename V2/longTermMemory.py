@@ -74,7 +74,7 @@ class longTermMemory:
         q = np.array(syn_coord, dtype=np.float32)
         scored = []
         for sem_dist, mem in candidates:
-            syn_pos = mem.get("syntacticPos")
+            syn_pos = mem.get("worldPos")
             if syn_pos:
                 diff     = np.array(syn_pos, dtype=np.float32) - q
                 syn_dist = float(np.dot(diff, diff))
