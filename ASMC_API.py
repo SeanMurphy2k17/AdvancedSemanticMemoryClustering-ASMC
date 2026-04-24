@@ -91,8 +91,8 @@ class AdvancedSemanticMemory:
         )
         return {"success": True, "anchor_id": anchor_id}
 
-    def get_context(self, query: str, layer1_count: int = 6,
-                    layer2_count: int = 6, complexity: int = 5) -> dict:
+    def get_context(self, query: str, layer1_count: int = 10,
+                    layer2_count: int = 12, complexity: int = 5, platform_tag: str = None) -> dict:
         """
         Retrieve layered context for a query.
             
@@ -102,7 +102,7 @@ class AdvancedSemanticMemory:
             anchors       — LTM anchor nodes found in same FAISS search
             anchor_chain  — structurally adjacent anchors (one graph hop)
         """
-        result = self._mm.queryMemory(query, k=layer2_count)
+        result = self._mm.queryMemory(query, k=layer2_count, layer1_count=layer1_count, platform_tag=platform_tag)
         return {
             "query":          query,
             "layer1":         result["stm"],
@@ -112,6 +112,10 @@ class AdvancedSemanticMemory:
             "anchors":        result["ltm_anchors"],
             "anchor_chain":   result["anchor_chain"],
         }
+
+    def get_recent(self, n: int, metadata_filter: dict = None) -> list:
+        """Return the last N STM entries, optionally filtered by metaDataTag key-value pairs."""
+        return self._mm.get_recent(n, metadata_filter=metadata_filter)
 
     def get_raw_entries(self, n: int = None, metadata_filter: dict = None) -> list:
         """Return raw STM entries, optionally filtered and limited."""

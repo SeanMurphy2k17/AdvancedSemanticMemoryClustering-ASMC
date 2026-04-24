@@ -12,6 +12,9 @@ class memoryManager:
         self._scm     = spatialCompMap(self._ltm)
         print(f"initialized {self.__class__.__name__}")
 
+    def get_recent(self, n: int, metadata_filter: dict = None) -> list:
+        return self._stm.get_recent(n, metadata_filter=metadata_filter)
+
     def addMemory(self, inputText: str, responseText: str,
                   metaDataTag: dict = None, anchor_id: int = None):
         meta   = dict(metaDataTag or {})
@@ -29,14 +32,17 @@ class memoryManager:
         if to_promote:
             self._ltm.addMemory(to_promote)
 
-    def queryMemory(self, text: str, k: int = 10) -> dict:
+    def queryMemory(self, text: str, k: int = 10, layer1_count: int = 6, platform_tag: str = None) -> dict:
         import time as _t
         _t0 = _t.perf_counter()
         print(f"[MEMORY QUERY] Step 1: converting query ({len(text.split())} words) to coordinates...", flush=True)
         coord      = self._spatial._svc.computeSpatialValence(text)
         print(f"[MEMORY QUERY] Step 2: searching recent memory... (step 1 took {_t.perf_counter()-_t0:.2f}s)", flush=True)
         _t1 = _t.perf_counter()
-        stm_result = self._stm.queryMemory(coord)
+        stm_spatial = self._stm.queryMemory(coord)
+        stm_recent  = self._stm.get_recent(layer1_count)
+        seen        = {id(m) for m in stm_spatial}
+        stm_result  = stm_spatial + [m for m in stm_recent if id(m) not in seen]
         print(f"[MEMORY QUERY] Step 3: searching long-term memory... (step 2 took {_t.perf_counter()-_t1:.2f}s)", flush=True)
         _t2 = _t.perf_counter()
         ltm_result = self._ltm.queryMemory(coord, k=k,
@@ -47,8 +53,10 @@ class memoryManager:
         anchors  = [m for m in ltm_result["direct"] if self._scm.isAnchor(m)]
         chain    = [m for m in ltm_result["chain"]  if not self._scm.isAnchor(m)]
         query_words   = self._spatial._svc.extractContentWords(text)
+        cursor_entry  = self._ltm.fetch_platform_cursor(platform_tag) if platform_tag else None
+        seed          = ([cursor_entry] + ltm_result["direct"]) if cursor_entry else ltm_result["direct"]
         semantic_raw  = self._ltm.semanticTraverse(
-            ltm_result["direct"], query_words, self._spatial._svc.extractContentWords)
+            seed, query_words, self._spatial._svc.extractContentWords)
         semantic      = [m for m in semantic_raw if not self._scm.isAnchor(m)]
 
         # traverse anchor graph — one hop from each found anchor

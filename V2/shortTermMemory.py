@@ -126,6 +126,13 @@ class shortTermMemory:
             self._checkpoint()
             return oldest
 
+    def get_recent(self, n: int, metadata_filter: dict = None) -> list:
+        with self._lock:
+            entries = list(self._entries)
+        if metadata_filter:
+            entries = [e for e in entries if all(e.get("metaDataTag", {}).get(k) == v for k, v in metadata_filter.items())]
+        return entries[-n:]
+
     def queryMemory(self, coord, radius=None) -> list:
         p = self._parse_6d(coord)
         if p is None:

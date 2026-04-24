@@ -15,8 +15,10 @@ class longTermMemory:
         base             = os.path.dirname(os.path.abspath(__file__))
         self.ltm_dir     = os.path.join(base, "MemoryStructures", "LTM")
         self.faiss_path  = os.path.join(self.ltm_dir, "asmc.faiss")
-        self.counter_path = os.path.join(self.ltm_dir, "counter.json")
+        self.counter_path  = os.path.join(self.ltm_dir, "counter.json")
+        self.cursors_path  = os.path.join(self.ltm_dir, "platform_cursors.json")
         os.makedirs(self.ltm_dir, exist_ok=True)
+        self._cursors = json.load(open(self.cursors_path)) if os.path.exists(self.cursors_path) else {}
 
         self._env = lmdb.open(self.ltm_dir, map_size=LTM_MAP_SIZE)
 
@@ -56,12 +58,20 @@ class longTermMemory:
 
         faiss.write_index(self._index, self.faiss_path)
         self._save_counter()
+        platform = memory.get("metaDataTag", {}).get("platform")
+        if platform:
+            self._cursors[platform] = mem_id
+            with open(self.cursors_path, "w") as f: json.dump(self._cursors, f)
         return mem_id
 
     def fetchById(self, ltm_id: int) -> dict:
         with self._env.begin() as txn:
             raw = txn.get(str(ltm_id).encode())
             return json.loads(raw) if raw else None
+
+    def fetch_platform_cursor(self, platform: str) -> dict:
+        ltm_id = self._cursors.get(platform)
+        return self.fetchById(ltm_id) if ltm_id is not None else None
 
     def updatePayload(self, ltm_id: int, data: dict):
         """Overwrite an existing LMDB record without touching the FAISS index."""
