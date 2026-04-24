@@ -117,6 +117,10 @@ class AdvancedSemanticMemory:
         """Return the last N STM entries, optionally filtered by metaDataTag key-value pairs."""
         return self._mm.get_recent(n, metadata_filter=metadata_filter)
 
+    def get_platform_cursor(self, platform: str) -> dict:
+        """Return the most recently promoted LTM entry for this platform, or None."""
+        return self._mm._ltm.fetch_platform_cursor(platform)
+
     def get_raw_entries(self, n: int = None, metadata_filter: dict = None) -> list:
         """Return raw STM entries, optionally filtered and limited."""
         entries = self._mm._stm._load()["entries"]

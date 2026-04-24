@@ -58,6 +58,8 @@ class memoryManager:
         semantic_raw  = self._ltm.semanticTraverse(
             seed, query_words, self._spatial._svc.extractContentWords)
         semantic      = [m for m in semantic_raw if not self._scm.isAnchor(m)]
+        if cursor_entry and not self._scm.isAnchor(cursor_entry):
+            memories = [cursor_entry] + [m for m in memories if m.get("inputText") != cursor_entry.get("inputText")]
 
         # traverse anchor graph — one hop from each found anchor
         anchor_chain = []
