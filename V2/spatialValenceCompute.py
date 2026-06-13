@@ -60,7 +60,16 @@ _NOUN_RELATION = wn.synset('relation.n.01')
 _VERB_RELATE   = wn.synset('relate.v.01')
 _VERB_USE      = wn.synset('use.v.01')
 
-class spatialValenceCompute:
+class _SVCMeta(type):
+    """Singleton metaclass — only one spatialValenceCompute instance exists."""
+    _instance = None
+    def __call__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__call__(*args, **kwargs)
+        return cls._instance
+
+
+class spatialValenceCompute(metaclass=_SVCMeta):
     def __init__(self):
         import lmdb
         self._domain_cache = {}

@@ -1,4 +1,5 @@
 import json
+import math
 import os
 
 import faiss
@@ -48,6 +49,8 @@ class longTermMemory:
     def addMemory(self, memory: dict):
         mem_id = self._next_id
         self._next_id += 1
+
+        memory["metaDataTag"]["ltm_id"] = mem_id
 
         vec = self._encode(memory["responsePos"])
         self._index.add_with_ids(vec, np.array([mem_id], dtype=np.int64))
@@ -114,6 +117,9 @@ class longTermMemory:
         direct   = [m for _, m in candidates[:k]]
         seen_ids = set(int(i) for i in I[0] if i != -1)
 
+        # Spider: stitch links before chain traversal so traversal follows more edges
+        self._stitch(direct[:3])
+
         chain = []
         with self._env.begin() as txn:
             for mem in direct:
@@ -139,6 +145,67 @@ class longTermMemory:
                             seen_ids.add(prev_id)
 
         return {"direct": direct, "chain": chain}
+
+    def _stitch(self, direct_results, k=20):
+        """
+        For each direct result, find nearby LTM memories and add links.
+        Called BEFORE chain traversal so the traversal follows more edges.
+        Returns total number of new links created.
+        """
+        new_links = 0
+        with self._env.begin(write=True) as txn:
+            for mem in direct_results:
+                meta = mem.get("metaDataTag", {})
+                if meta.get("type") == "scm_anchor":
+                    continue
+                mem_id = meta.get("ltm_id")
+                if not mem_id:
+                    continue
+                mem_pos = mem.get("responsePos")
+                if not mem_pos:
+                    continue
+
+                vec = self._encode(mem_pos)
+                search_k = min(k, max(self._index.ntotal, 1))
+                D, I = self._index.search(vec, search_k)
+
+                existing = set()
+                for coord in mem.get("linkedMemories", []):
+                    existing.add(tuple(coord))
+
+                for dist, cand_id in zip(D[0], I[0]):
+                    if cand_id == -1 or cand_id == mem_id:
+                        continue
+                    if cand_id in existing:
+                        continue
+
+                    raw = txn.get(str(cand_id).encode())
+                    if not raw:
+                        continue
+                    cand = json.loads(raw)
+                    cand_pos = cand.get("responsePos") or cand.get("inputPos")
+                    if not cand_pos:
+                        continue
+
+                    raw_dist = math.sqrt(sum((a - b) ** 2
+                                             for a, b in zip(mem_pos, cand_pos)))
+                    if raw_dist > 0.40:
+                        continue
+
+                    coord_tuple = tuple(cand_pos)
+                    if coord_tuple in existing:
+                        continue
+
+                    existing.add(coord_tuple)
+                    mem["linkedMemories"].append(list(cand_pos))
+                    new_links += 1
+
+                if mem["linkedMemories"]:
+                    txn.put(str(mem_id).encode(),
+                        json.dumps(mem, default=lambda o: list(o)
+                                   if isinstance(o, tuple) else o).encode())
+
+        return new_links
 
     def semanticTraverse(self, start_memories: list, query_words: list,
                          extract_fn, max_results: int = 8, max_nodes: int = 20) -> list:
