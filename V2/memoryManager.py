@@ -45,8 +45,18 @@ class memoryManager:
         stm_result  = stm_spatial + [m for m in stm_recent if id(m) not in seen]
         print(f"[MEMORY QUERY] Step 3: searching long-term memory... (step 2 took {_t.perf_counter()-_t1:.2f}s)", flush=True)
         _t2 = _t.perf_counter()
+
+        # Entity overlap channel — look up named entities from query text
+        entity_ids = set()
+        entity_results = self._ltm.resolveEntities(text)
+        for entity_key, mem_ids in entity_results.items():
+            for mid in mem_ids:
+                entity_ids.add(mid)
+        print(f"[MEMORY QUERY] entity overlap: {len(entity_ids)} candidate IDs from {len(entity_results)} entities", flush=True)
+
         ltm_result = self._ltm.queryMemory(coord, k=k,
-                         syn_coord=self._spatial._svc.computeWorldValence(text))
+                         syn_coord=self._spatial._svc.computeWorldValence(text),
+                         entity_ids=entity_ids if entity_ids else None)
         print(f"[MEMORY QUERY] done. Total query time: {_t.perf_counter()-_t0:.2f}s", flush=True)
 
         memories = [m for m in ltm_result["direct"] if not self._scm.isAnchor(m)]

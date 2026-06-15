@@ -70,8 +70,22 @@ class _SVCMeta(type):
 
 
 class spatialValenceCompute(metaclass=_SVCMeta):
+    _NLTK_PACKAGES = [
+        ("punkt_tab", "tokenizers"),
+        ("averaged_perceptron_tagger", "taggers"),
+        ("maxent_ne_chunker_tab", "chunkers"),
+        ("words", "corpora"),
+    ]
+
     def __init__(self):
         import lmdb
+        # Auto-download NLTK data if missing — no manual downloads needed
+        for pkg, subdir in self._NLTK_PACKAGES:
+            try:
+                nltk.data.find(f"{subdir}/{pkg}")
+            except LookupError:
+                nltk.download(pkg, quiet=True)
+
         self._domain_cache = {}
         self._word_cache   = {}   # session-level hot cache: (lemma, pos) → 7-tuple
         self._lemmatizer   = WordNetLemmatizer()
@@ -295,6 +309,69 @@ class spatialValenceCompute(metaclass=_SVCMeta):
             r(n_acc / w_total),   # H: cognitive vs attribute
             r(o_acc / w_total),   # I: relational vs object
         )
+
+    def extractFactualTags(self, text: str) -> dict:
+        """Extract factual entities from text using only NLTK — no ML.
+        Returns dict with entities, dates, quantities, technical_terms.
+        If no entities found, returns empty lists ("unknown" marker).
+        """
+        import re
+        from nltk import ne_chunk, pos_tag, word_tokenize
+
+        tokens   = word_tokenize(text)
+        pos_tags = pos_tag(tokens)
+        tree     = ne_chunk(pos_tags)
+
+        entities     = []
+        dates        = []
+        quantities   = []
+        technicals   = []
+        seen_words   = set()
+
+        # Named entities via NLTK ne_chunk
+        for chunk in tree:
+            if hasattr(chunk, 'label'):
+                label  = chunk.label()
+                etext  = ' '.join(c[0] if isinstance(c, tuple) else str(c) for c in chunk)
+                if label == 'PERSON':
+                    entities.append(('person', etext.lower()))
+                    seen_words.update(etext.lower().split())
+                elif label == 'ORGANIZATION':
+                    entities.append(('organization', etext.lower()))
+                    seen_words.update(etext.lower().split())
+                elif label == 'GPE':
+                    entities.append(('location', etext.lower()))
+                    seen_words.update(etext.lower().split())
+                elif label == 'DATE':
+                    dates.append(('date', etext.lower()))
+
+        # Dates: month names + 4-digit year
+        for m in re.finditer(
+            r'((?:January|February|March|April|May|June|'
+            r'July|August|September|October|November|December)'
+            r'\s*\d{1,2})[,]?\s*(\d{4})?', text, re.IGNORECASE
+        ):
+            dates.append(('date', m.group(0).strip(',').lower()))
+
+        # Quantities: numbers with units
+        for m in re.finditer(
+            r'(\d+(?:\.\d+)?)\s*'
+            r'(?:hours?|days?|weeks?|months?|years?|percent|'
+            r'mb|gb|kb|ms|seconds?|am|pm|kg|lbs?)', text, re.IGNORECASE
+        ):
+            quantities.append(('quantity', m.group(0).strip().lower()))
+
+        # Technical terms: proper nouns not already captured as entities
+        for word, tag in pos_tags:
+            if tag == 'NNP' and word.lower() not in seen_words:
+                technicals.append(('technical', word.lower()))
+
+        return {
+            'entities':       entities,
+            'dates':          dates,
+            'quantities':     quantities,
+            'technical_terms': technicals,
+        }
 
 
 if __name__ == "__main__":

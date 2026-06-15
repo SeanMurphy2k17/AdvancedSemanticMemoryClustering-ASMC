@@ -1,10 +1,13 @@
 import json
 import math
 import os
+import threading
 
 import faiss
 import lmdb
 import numpy as np
+
+from spatialValenceCompute import spatialValenceCompute
 
 FUZZINESS    = 0.4
 DIM          = 6
@@ -29,7 +32,129 @@ class longTermMemory:
             self._index = faiss.IndexIDMap(faiss.IndexFlatL2(DIM))
 
         self._next_id = self._load_counter()
+        self._index_event = threading.Event()  # set when rebuild completes
+        self._init_entity_index()
         print(f"initialized {self.__class__.__name__}")
+
+    def _init_entity_index(self):
+        """Check if entity index exists; start async rebuild if missing (old DB)."""
+        with self._env.begin() as txn:
+            self._index_ready = txn.get(b"__entity_index_ready__") is not None
+
+        if not self._index_ready:
+            print("[ENTITY INDEX] ⚠ entity index not found — starting background rebuild...", flush=True)
+            self._index_ready = False
+            # Start rebuild in background thread so startup is not blocked
+            def _rebuild_bg():
+                try:
+                    total = self.buildEntityIndex()
+                    print(f"[ENTITY INDEX] ✅ background rebuild complete: {total} memories indexed", flush=True)
+                except Exception as e:
+                    print(f"[ENTITY INDEX] ⚠ background rebuild failed: {e}", flush=True)
+                finally:
+                    self._index_event.set()  # signal completion
+            t = threading.Thread(target=_rebuild_bg, daemon=True)
+            t.start()
+        else:
+            self._index_event.set()  # already ready, no wait needed
+            print("[ENTITY INDEX] ✅ entity index present", flush=True)
+
+    def wait_for_index(self, timeout=None):
+        """Block until entity index rebuild completes. timeout in seconds (None=infinite)."""
+        ready = self._index_event.wait(timeout=timeout)
+        if not ready:
+            print("[ENTITY INDEX] ⚠ wait timed out — index may still be rebuilding", flush=True)
+            return False
+        print("[ENTITY INDEX] ✅ rebuild finished (or already ready)", flush=True)
+        return True
+
+    def _entity_key(self, entity_type: str, entity_text: str) -> bytes:
+        """Encode an entity into a LMDB key: 'type\x00text'"""
+        return f"{entity_type}\x00{entity_text}".encode()
+
+    def _index_entities(self, mem_id: int, factual_tags: dict, txn=None):
+        """Incrementally add entities from a single memory into the reverse index.
+        Called automatically during addMemory(). Pass txn to reuse a parent write txn."""
+        if not factual_tags:
+            return
+        tags = [
+            (etype, etext) for etype, etext in factual_tags.get("entities", [])
+        ] + [
+            (etype, etext) for etype, etext in factual_tags.get("dates", [])
+        ] + [
+            (etype, etext) for etype, etext in factual_tags.get("quantities", [])
+        ] + [
+            (etype, etext) for etype, etext in factual_tags.get("technical_terms", [])
+        ]
+        if not tags:
+            return
+        # Open our own write txn if no parent was passed in
+        own_txn = txn is None
+        if own_txn:
+            txn = self._env.begin(write=True)
+        try:
+            for etype, etext in tags:
+                key = self._entity_key(etype, etext)
+                existing = txn.get(key)
+                if existing:
+                    ids = json.loads(existing)
+                else:
+                    ids = []
+                if mem_id not in ids:
+                    ids.append(mem_id)
+                    ids.sort()
+                    txn.put(key, json.dumps(ids).encode())
+        finally:
+            if own_txn:
+                txn.commit()
+
+    def buildEntityIndex(self) -> int:
+        """Bulk-build (or rebuild) the entity reverse index over all LTM memories.
+        Returns the number of unique entities indexed."""
+        print("[ENTITY INDEX] building reverse index...")
+        indexed = 0
+        # Step 1: collect all entity keys to delete (can't delete while iterating)
+        entity_keys = []
+        with self._env.begin() as txn:
+            cursor = txn.cursor()
+            for key, _ in cursor:
+                if b"\x00" in key:
+                    entity_keys.append(key)
+        # Step 2: delete them in a write transaction
+        if entity_keys:
+            with self._env.begin(write=True) as txn:
+                for key in entity_keys:
+                    txn.delete(key)
+                txn.delete(b"__entity_index_ready__")
+        # Step 3: rebuild from all memories
+        with self._env.begin(write=True) as txn:
+            cursor = txn.cursor()
+            for key, raw in cursor:
+                if key == b"__entity_index_ready__" or b"\x00" in key:
+                    continue
+                mem = json.loads(raw)
+                meta = mem.get("metaDataTag", {})
+                if meta.get("type") == "scm_anchor":
+                    continue
+                mem_id = meta.get("ltm_id")
+                if not mem_id:
+                    continue
+                # Always re-extract during rebuild — old tags may have
+                # stale formats (e.g. tuple strings from NLTK tree leaves)
+                factual_tags = spatialValenceCompute().extractFactualTags(
+                    mem.get("inputText", "")
+                )
+                mem["factualTags"] = factual_tags
+                txn.put(key, json.dumps(mem, default=lambda o: list(o)
+                                      if isinstance(o, tuple) else o).encode())
+                self._index_entities(mem_id, factual_tags, txn=txn)
+                indexed += 1
+        # Step 4: mark index as ready
+        with self._env.begin(write=True) as txn:
+            txn.put(b"__entity_index_ready__", b"1")
+        self._index_ready = True
+        print(f"[ENTITY INDEX] built: {indexed} memories indexed")
+        return indexed
 
     def _load_counter(self) -> int:
         if os.path.exists(self.counter_path):
@@ -58,6 +183,11 @@ class longTermMemory:
         payload = json.dumps(memory, default=lambda o: list(o) if isinstance(o, tuple) else o).encode()
         with self._env.begin(write=True) as txn:
             txn.put(str(mem_id).encode(), payload)
+
+        # Incremental: index this memory's entities into the reverse index
+        factual_tags = memory.get("factualTags")
+        if factual_tags:
+            self._index_entities(mem_id, factual_tags)
 
         faiss.write_index(self._index, self.faiss_path)
         self._save_counter()
@@ -97,7 +227,7 @@ class longTermMemory:
         scored.sort(key=lambda x: x[0])
         return scored
 
-    def queryMemory(self, inputCoord, k: int = 10, syn_coord=None) -> dict:
+    def queryMemory(self, inputCoord, k: int = 10, syn_coord=None, entity_ids=None) -> dict:
         q        = self._encode(inputCoord)
         search_k = min(k * 4, max(self._index.ntotal, 1))
         D, I     = self._index.search(q, search_k)
@@ -116,6 +246,22 @@ class longTermMemory:
 
         direct   = [m for _, m in candidates[:k]]
         seen_ids = set(int(i) for i in I[0] if i != -1)
+
+        # Merge entity-retrieved memories (overlap channel)
+        entity_direct = []
+        if entity_ids:
+            entity_set = set(entity_ids)
+            with self._env.begin() as txn:
+                for eid in entity_set:
+                    if eid in seen_ids:
+                        continue
+                    raw = txn.get(str(eid).encode())
+                    if raw:
+                        mem = json.loads(raw)
+                        entity_direct.append(mem)
+                        seen_ids.add(eid)
+
+        direct = direct + entity_direct[:k - len(direct)]  # cap total at k
 
         # Spider: stitch links before chain traversal so traversal follows more edges
         self._stitch(direct[:3])
@@ -150,6 +296,8 @@ class longTermMemory:
         """
         For each direct result, find nearby LTM memories and add links.
         Called BEFORE chain traversal so the traversal follows more edges.
+        Backfills factualTags on old memories that lack them.
+        BIDIRECTIONAL: when A links to B, B also links back to A.
         Returns total number of new links created.
         """
         new_links = 0
@@ -165,6 +313,15 @@ class longTermMemory:
                 if not mem_pos:
                     continue
 
+                # Backfill factualTags on old memories that lack them
+                if "factualTags" not in mem:
+                    mem["factualTags"] = spatialValenceCompute().extractFactualTags(
+                        mem.get("inputText", "")
+                    )
+                    txn.put(str(mem_id).encode(),
+                        json.dumps(mem, default=lambda o: list(o)
+                                   if isinstance(o, tuple) else o).encode())
+
                 vec = self._encode(mem_pos)
                 search_k = min(k, max(self._index.ntotal, 1))
                 D, I = self._index.search(vec, search_k)
@@ -172,6 +329,16 @@ class longTermMemory:
                 existing = set()
                 for coord in mem.get("linkedMemories", []):
                     existing.add(tuple(coord))
+
+                # Collect query entities for overlap linking
+                mem_entities = set()
+                for etype, etext in mem.get("factualTags", {}).get("entities", []):
+                    mem_entities.add((etype, etext))
+                for etype, etext in mem.get("factualTags", {}).get("dates", []):
+                    mem_entities.add((etype, etext))
+
+                # Track candidates that need reverse-link updates
+                cand_updates = {}  # cand_id -> updated cand dict
 
                 for dist, cand_id in zip(D[0], I[0]):
                     if cand_id == -1 or cand_id == mem_id:
@@ -187,25 +354,81 @@ class longTermMemory:
                     if not cand_pos:
                         continue
 
-                    raw_dist = math.sqrt(sum((a - b) ** 2
-                                             for a, b in zip(mem_pos, cand_pos)))
-                    if raw_dist > 0.40:
-                        continue
+                    # Backfill factualTags on candidate if missing
+                    if "factualTags" not in cand:
+                        cand["factualTags"] = spatialValenceCompute().extractFactualTags(
+                            cand.get("inputText", "")
+                        )
+                        txn.put(str(cand_id).encode(),
+                            json.dumps(cand, default=lambda o: list(o)
+                                       if isinstance(o, tuple) else o).encode())
 
-                    coord_tuple = tuple(cand_pos)
-                    if coord_tuple in existing:
-                        continue
+                    cand_entities = set()
+                    for etype, etext in cand.get("factualTags", {}).get("entities", []):
+                        cand_entities.add((etype, etext))
+                    for etype, etext in cand.get("factualTags", {}).get("dates", []):
+                        cand_entities.add((etype, etext))
 
-                    existing.add(coord_tuple)
-                    mem["linkedMemories"].append(list(cand_pos))
-                    new_links += 1
+                    should_link = False
+
+                    # Entity overlap check - link even if FAISS distance > 0.40
+                    overlap = mem_entities & cand_entities
+                    if overlap and tuple(cand_pos) not in existing:
+                        should_link = True
+
+                    if not should_link:
+                        # Existing proximity check
+                        raw_dist = math.sqrt(sum((a - b) ** 2
+                                                 for a, b in zip(mem_pos, cand_pos)))
+                        if raw_dist > 0.40:
+                            continue
+                        if tuple(cand_pos) in existing:
+                            continue
+                        should_link = True
+
+                    if should_link:
+                        existing.add(tuple(cand_pos))
+                        my_anchor = list(cand_pos)
+                        mem["linkedMemories"].append(my_anchor)
+                        new_links += 1
+
+                        # Bidirectional: candidate also remembers us
+                        cand_my_anchor = list(mem_pos)
+                        cand_links = cand.setdefault("linkedMemories", [])
+                        if cand_my_anchor not in cand_links:
+                            cand_links.append(cand_my_anchor)
+                            cand_updates[cand_id] = cand
 
                 if mem["linkedMemories"]:
                     txn.put(str(mem_id).encode(),
                         json.dumps(mem, default=lambda o: list(o)
                                    if isinstance(o, tuple) else o).encode())
 
+                # Write all bidirectional updates back
+                for cid, updated_cand in cand_updates.items():
+                    txn.put(str(cid).encode(),
+                        json.dumps(updated_cand, default=lambda o: list(o)
+                                   if isinstance(o, tuple) else o).encode())
+
         return new_links
+
+    def resolveEntities(self, text: str) -> dict:
+        """Look up entities in the reverse index. Returns {entity_key: [mem_ids]}.
+        Uses the same extractFactualTags to tokenize the input text."""
+        if not self._index_ready:
+            return {}
+        tags = spatialValenceCompute().extractFactualTags(text)
+        results = {}
+        with self._env.begin() as txn:
+            for etype, etext in (tags.get("entities", []) +
+                                  tags.get("dates", []) +
+                                  tags.get("quantities", []) +
+                                  tags.get("technical_terms", [])):
+                key = self._entity_key(etype, etext)
+                raw = txn.get(key)
+                if raw:
+                    results[f"{etype}:{etext}"] = json.loads(raw)
+        return results
 
     def semanticTraverse(self, start_memories: list, query_words: list,
                          extract_fn, max_results: int = 8, max_nodes: int = 20) -> list:

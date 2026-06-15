@@ -137,7 +137,10 @@ class AdvancedSemanticMemory:
         stm_count = self._mm._stm.count()
         anchors = memories = 0
         with self._mm._ltm._env.begin() as txn:
-            for _, v in txn.cursor():
+            for key, v in txn.cursor():
+                # Skip entity index keys and sentinel keys (they contain \x00)
+                if b"\x00" in key or key.startswith(b"__"):
+                    continue
                 entry = json.loads(v)
                 if entry.get("metaDataTag", {}).get("type") == "scm_anchor":
                     anchors += 1

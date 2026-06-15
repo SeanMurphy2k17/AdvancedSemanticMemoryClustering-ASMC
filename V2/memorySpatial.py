@@ -10,6 +10,7 @@ class memorySpatial:
                           prevPos: tuple = None,
                           linkedMemories: list = None,
                           metaDataTag: dict = None) -> dict:
+        tags = self._svc.extractFactualTags(inputText)
         return {
             "inputText":       inputText,
             "inputPos":        self._svc.computeSpatialValence(inputText),
@@ -20,6 +21,7 @@ class memorySpatial:
             "prevPos":         prevPos,
             "linkedMemories":  linkedMemories or [],
             "metaDataTag":     metaDataTag or {},
+            "factualTags":     tags,
             "timeDate":        datetime.now(timezone.utc).isoformat(),
         }
 

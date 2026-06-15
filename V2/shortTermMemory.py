@@ -77,6 +77,7 @@ class shortTermMemory:
             return []
         linked = []
         seen   = set()
+        my_anchor = list(memory.get("responsePos") or memory.get("inputPos"))
         for e in entries:
             hit = False
             for key in ("inputPos", "responsePos"):
@@ -90,6 +91,11 @@ class shortTermMemory:
             if anchor and anchor not in seen:
                 seen.add(anchor)
                 linked.append(list(anchor))
+                # Bidirectional: neighbor also remembers us
+                if my_anchor and list(anchor) != my_anchor:
+                    neighbor_links = e.setdefault("linkedMemories", [])
+                    if my_anchor not in neighbor_links:
+                        neighbor_links.append(my_anchor)
         return linked
 
     # --- public API ---
