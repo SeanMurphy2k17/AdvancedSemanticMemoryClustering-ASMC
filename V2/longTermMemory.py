@@ -32,8 +32,10 @@ class longTermMemory:
             self._index = faiss.IndexIDMap(faiss.IndexFlatL2(DIM))
 
         self._next_id = self._load_counter()
-        self._index_event = threading.Event()  # set when rebuild completes
+        self._index_event = threading.Event()  # set when entity rebuild completes
+        self._cw_index_event = threading.Event()  # set when content-word rebuild completes
         self._init_entity_index()
+        self._init_content_index()
         print(f"initialized {self.__class__.__name__}")
 
     def _init_entity_index(self):
@@ -67,6 +69,65 @@ class longTermMemory:
             return False
         print("[ENTITY INDEX] ✅ rebuild finished (or already ready)", flush=True)
         return True
+
+    def _init_content_index(self):
+        """Check if content-word index exists; start async rebuild if missing (old DB)."""
+        with self._env.begin() as txn:
+            self._cw_index_ready = txn.get(b"__content_index_ready__") is not None
+
+        if not self._cw_index_ready:
+            print("[CONTENT INDEX] ⚠ content-word index not found — starting background rebuild...", flush=True)
+            self._cw_index_ready = False
+            def _rebuild_bg():
+                try:
+                    total = self.buildContentIndex()
+                    print(f"[CONTENT INDEX] ✅ background rebuild complete: {total} memories indexed", flush=True)
+                except Exception as e:
+                    print(f"[CONTENT INDEX] ⚠ background rebuild failed: {e}", flush=True)
+                finally:
+                    self._cw_index_event.set()
+            t = threading.Thread(target=_rebuild_bg, daemon=True)
+            t.start()
+        else:
+            self._cw_index_event.set()
+            print("[CONTENT INDEX] ✅ content-word index present", flush=True)
+
+    def wait_for_cw_index(self, timeout=None):
+        """Block until content-word index rebuild completes. timeout in seconds."""
+        ready = self._cw_index_event.wait(timeout=timeout)
+        if not ready:
+            print("[CONTENT INDEX] ⚠ wait timed out — index may still be rebuilding", flush=True)
+            return False
+        print("[CONTENT INDEX] ✅ rebuild finished (or already ready)", flush=True)
+        return True
+
+    def _cw_key(self, word: str) -> bytes:
+        """Encode a content word into a LMDB key: 'cw\x00word'"""
+        return f"cw\x00{word}".encode()
+
+    def _index_content_words(self, mem_id: int, content_words: list, txn=None):
+        """Incrementally add content words from a single memory into the inverted index.
+        Called automatically during addMemory(). Pass txn to reuse a parent write txn."""
+        if not content_words:
+            return
+        own_txn = txn is None
+        if own_txn:
+            txn = self._env.begin(write=True)
+        try:
+            for word in content_words:
+                key = self._cw_key(word)
+                existing = txn.get(key)
+                if existing:
+                    ids = json.loads(existing)
+                else:
+                    ids = []
+                if mem_id not in ids:
+                    ids.append(mem_id)
+                    ids.sort()
+                    txn.put(key, json.dumps(ids).encode())
+        finally:
+            if own_txn:
+                txn.commit()
 
     def _entity_key(self, entity_type: str, entity_text: str) -> bytes:
         """Encode an entity into a LMDB key: 'type\x00text'"""
@@ -156,6 +217,52 @@ class longTermMemory:
         print(f"[ENTITY INDEX] built: {indexed} memories indexed")
         return indexed
 
+    def buildContentIndex(self) -> int:
+        """Bulk-build (or rebuild) the content-word inverted index over all LTM memories.
+        Returns the number of unique content words indexed."""
+        print("[CONTENT INDEX] building inverted index...")
+        indexed = 0
+        cw_count = 0
+        # Step 1: collect all cw keys to delete
+        cw_keys = []
+        with self._env.begin() as txn:
+            cursor = txn.cursor()
+            for key, _ in cursor:
+                if key.startswith(b"cw\x00"):
+                    cw_keys.append(key)
+        # Step 2: delete them
+        if cw_keys:
+            with self._env.begin(write=True) as txn:
+                for key in cw_keys:
+                    txn.delete(key)
+                txn.delete(b"__content_index_ready__")
+        # Step 3: rebuild from all memories
+        with self._env.begin(write=True) as txn:
+            cursor = txn.cursor()
+            for key, raw in cursor:
+                if key == b"__content_index_ready__" or key.startswith(b"cw\x00") or b"\x00" in key:
+                    continue
+                mem = json.loads(raw)
+                if not isinstance(mem, dict):
+                    continue
+                meta = mem.get("metaDataTag", {})
+                if meta.get("type") == "scm_anchor":
+                    continue
+                mem_id = meta.get("ltm_id")
+                if not mem_id:
+                    continue
+                cw = mem.get("contentWords", [])
+                if cw:
+                    self._index_content_words(mem_id, cw, txn=txn)
+                    cw_count += len(set(cw))
+                indexed += 1
+        # Step 4: mark index as ready
+        with self._env.begin(write=True) as txn:
+            txn.put(b"__content_index_ready__", b"1")
+        self._cw_index_ready = True
+        print(f"[CONTENT INDEX] built: {indexed} memories indexed, {cw_count} unique content words")
+        return indexed
+
     def _load_counter(self) -> int:
         if os.path.exists(self.counter_path):
             with open(self.counter_path, "r") as f:
@@ -184,10 +291,13 @@ class longTermMemory:
         with self._env.begin(write=True) as txn:
             txn.put(str(mem_id).encode(), payload)
 
-        # Incremental: index this memory's entities into the reverse index
+        # Incremental: index this memory's entities and content words
         factual_tags = memory.get("factualTags")
         if factual_tags:
             self._index_entities(mem_id, factual_tags)
+        content_words = memory.get("contentWords", [])
+        if content_words:
+            self._index_content_words(mem_id, content_words)
 
         faiss.write_index(self._index, self.faiss_path)
         self._save_counter()
@@ -436,26 +546,23 @@ class longTermMemory:
         return results
 
     def resolveContentWords(self, content_words: list, top_n: int = 20) -> dict:
-        """Look up memories by content word overlap. Returns {mem_id: overlap_count}.
-        content_words = extractContentWords(query) = ['sea', 'wave', 'crash']
-        Returns top_n memories ranked by number of overlapping words."""
+        """Look up memories by content word overlap using the inverted index.
+        Returns {mem_id: overlap_count} for top_n memories ranked by overlap."""
         if not content_words:
             return {}
-        overlap_counts = {}
         query_set = set(content_words)
+        # Aggregate mem_id -> count across all query words via index (O(1) per word)
+        mem_scores = {}
         with self._env.begin() as txn:
-            for key, raw in txn.cursor():
-                if b"\x00" in key or key.startswith(b"__"):
-                    continue
-                mem = json.loads(raw)
-                if mem.get("metaDataTag", {}).get("type") == "scm_anchor":
-                    continue
-                mem_cw = set(mem.get("contentWords", []))
-                overlap = len(query_set & mem_cw)
-                if overlap > 0:
-                    overlap_counts[mem["metaDataTag"]["ltm_id"]] = overlap
-        # Return top results sorted by overlap count descending
-        sorted_results = sorted(overlap_counts.items(), key=lambda x: x[1], reverse=True)
+            for word in query_set:
+                key = self._cw_key(word)
+                raw = txn.get(key)
+                if raw:
+                    mem_ids = json.loads(raw)
+                    for mid in mem_ids:
+                        mem_scores[mid] = mem_scores.get(mid, 0) + 1
+        # Sort by overlap count descending, return top_n
+        sorted_results = sorted(mem_scores.items(), key=lambda x: x[1], reverse=True)
         return dict(sorted_results[:top_n])
 
     def semanticTraverse(self, start_memories: list, query_words: list,
