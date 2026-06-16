@@ -25,6 +25,15 @@ QUERIES = [
     "the king ruled with wisdom and power",
     "a soldier returned home from the front",
     "the queen wore a golden crown",
+    "Arthur and Guinevere in the court of the king",
+    "Tennyson's Idylls of the King published in 1859",
+    "Alfred Lord Tennyson poet laureate of England",
+    "The Lady of Shalott by Alfred Tennyson",
+    "Knights of the Round Table at Camelot",
+    "Queen Mary and Henry VIII of England",
+    "The Charge of the Light Brigade at Balaclava",
+    "In Memoriam A.H.H. dedicated to Arthur Henry Hallam",
+    "Tennyson wrote Maud and The Princess in the 1840s",
 ]
 
 

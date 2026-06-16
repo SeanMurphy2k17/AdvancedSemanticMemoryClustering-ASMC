@@ -414,7 +414,8 @@ class longTermMemory:
 
     def resolveEntities(self, text: str) -> dict:
         """Look up entities in the reverse index. Returns {entity_key: [mem_ids]}.
-        Uses the same extractFactualTags to tokenize the input text."""
+        Uses the same extractFactualTags to tokenize the input text.
+        Case-insensitive: tries exact match first, then lowercase fallback."""
         if not self._index_ready:
             return {}
         tags = spatialValenceCompute().extractFactualTags(text)
@@ -426,9 +427,36 @@ class longTermMemory:
                                   tags.get("technical_terms", [])):
                 key = self._entity_key(etype, etext)
                 raw = txn.get(key)
+                if not raw:
+                    # Fallback: try lowercase entity text (handles case mismatches)
+                    key_lower = self._entity_key(etype, etext.lower())
+                    raw = txn.get(key_lower)
                 if raw:
                     results[f"{etype}:{etext}"] = json.loads(raw)
         return results
+
+    def resolveContentWords(self, content_words: list, top_n: int = 20) -> dict:
+        """Look up memories by content word overlap. Returns {mem_id: overlap_count}.
+        content_words = extractContentWords(query) = ['sea', 'wave', 'crash']
+        Returns top_n memories ranked by number of overlapping words."""
+        if not content_words:
+            return {}
+        overlap_counts = {}
+        query_set = set(content_words)
+        with self._env.begin() as txn:
+            for key, raw in txn.cursor():
+                if b"\x00" in key or key.startswith(b"__"):
+                    continue
+                mem = json.loads(raw)
+                if mem.get("metaDataTag", {}).get("type") == "scm_anchor":
+                    continue
+                mem_cw = set(mem.get("contentWords", []))
+                overlap = len(query_set & mem_cw)
+                if overlap > 0:
+                    overlap_counts[mem["metaDataTag"]["ltm_id"]] = overlap
+        # Return top results sorted by overlap count descending
+        sorted_results = sorted(overlap_counts.items(), key=lambda x: x[1], reverse=True)
+        return dict(sorted_results[:top_n])
 
     def semanticTraverse(self, start_memories: list, query_words: list,
                          extract_fn, max_results: int = 8, max_nodes: int = 20) -> list:

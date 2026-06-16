@@ -54,9 +54,17 @@ class memoryManager:
                 entity_ids.add(mid)
         print(f"[MEMORY QUERY] entity overlap: {len(entity_ids)} candidate IDs from {len(entity_results)} entities", flush=True)
 
+        # Content word overlap channel — match significant words from query
+        content_words = self._spatial._svc.extractContentWords(text)
+        content_id_results = self._ltm.resolveContentWords(content_words)
+        content_ids = set(content_id_results.keys())
+        print(f"[MEMORY QUERY] content overlap: {len(content_ids)} candidate IDs from {len(content_words)} words", flush=True)
+
+        # Merge both channels — entity overlap takes priority
+        all_overlap_ids = entity_ids | content_ids
         ltm_result = self._ltm.queryMemory(coord, k=k,
                          syn_coord=self._spatial._svc.computeWorldValence(text),
-                         entity_ids=entity_ids if entity_ids else None)
+                         entity_ids=all_overlap_ids if all_overlap_ids else None)
         print(f"[MEMORY QUERY] done. Total query time: {_t.perf_counter()-_t0:.2f}s", flush=True)
 
         memories = [m for m in ltm_result["direct"] if not self._scm.isAnchor(m)]
