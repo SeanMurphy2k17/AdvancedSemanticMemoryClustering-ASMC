@@ -36,7 +36,7 @@ class shortTermMemory:
     def _checkpoint(self):
         tmp = self.stm_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"entries": self._entries}, f, ensure_ascii=False,
+            json.dump({"entries": self._entries}, f, ensure_ascii=False, indent=2,
                       default=lambda o: list(o) if isinstance(o, tuple) else o)
         os.replace(tmp, self.stm_path)
 
