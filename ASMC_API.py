@@ -130,7 +130,7 @@ class AdvancedSemanticMemory:
                 if all(e.get("metaDataTag", {}).get(k) == v
                        for k, v in metadata_filter.items())
             ]
-        return entries[:n] if n else entries
+        return entries[-n:] if n else entries
 
     def get_statistics(self) -> dict:
         """Counts across all memory layers."""
