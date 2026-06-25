@@ -591,9 +591,36 @@ print(f"✅ Imported {len(dataset['knowledge_entries'])} knowledge entries")
 
 ---
 
+
+### Memory Retrieval Temperature (`temp`)
+
+All query methods accept an optional `temp` parameter (0.0-1.0, default 0.5) that controls
+the balance between **entity-precision** and **semantic-drift** retrieval:
+
+```python
+# Balanced retrieval (default)
+results = memory.get_context("find the exit key", temp=0.5)
+
+# High temp - leans into semantic drift when actions are repetitive
+results = memory.get_context("who am I", temp=0.9)
+
+# Low temp - stays locked on entity matches
+results = memory.get_context("use_key on exit_door", temp=0.1)
+```
+
+The system automatically computes a **Herfindahl-Hirschman Index (HHI)** from recent STM
+actions to measure behavioral concentration. The \`temp\` parameter scales how much this HHI
+shifts retrieval from entity-precision to associative semantic drift.
+
 ## Credits
 
 **Created by:**
+- **Qwen / Qwen Code** (AI Co-Inventor & Implementation Partner)
+  - Dynamic memory temp: HHI-based retrieval temperature control
+  - Context-aware action filtering for dungeon system
+  - Tool loop history cap and sensor update deduplication
+  - Action model context pollution fix
+
 - **Sean Murphy** (Human Inventor & System Architect)
   - Original vision and design
   - 9D semantic space architecture
