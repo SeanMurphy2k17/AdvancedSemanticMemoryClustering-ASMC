@@ -65,8 +65,8 @@ class memoryManager:
         # HHI measures action concentration in recent memory (0.0 = diverse, 1.0 = monopolized)
         # temp controls how much HHI shifts retrieval from entity-precision to semantic-drift
         hhi = 0.0
-        if temp > 0.0 and temp < 1.0:
-            # Only compute HHI when temp is non-trivial (skip at extremes for perf)
+        has_actions = False
+        if temp > 0.0:
             recent = self._stm.get_recent(10)
             actions = []
             for m in recent:
@@ -75,6 +75,7 @@ class memoryManager:
                 if action:
                     actions.append(action.split()[0] if action else "")
             if actions:
+                has_actions = True
                 from collections import Counter
                 counts = Counter(actions)
                 total = len(actions)
@@ -82,17 +83,23 @@ class memoryManager:
                 print(f"[MEMORY QUERY] HHI={hhi:.3f} temp={temp} ({len(actions)} actions, {len(counts)} unique)", flush=True)
 
         # Apply temp-weighted channel balance
-        # temp=0.0 → 100% entity precision, temp=1.0 → full HHI-driven drift
-        # entity_weight = 1.0 - hhi*temp, semantic_weight = hhi*temp
+        # No actions + high temp = full semantic drift (idle agent should wander)
+        # Has actions + high temp + high HHI = drift (bored, repetitive)
+        # Has actions + high temp + low HHI = precision (active, diverse)
         if temp > 0.0:
-            entity_frac   = 1.0 - hhi * temp
-            semantic_frac = hhi * temp
+            if not has_actions:
+                # Idle agent — default to full semantic drift
+                entity_frac   = 1.0 - temp
+                semantic_frac = temp
+            else:
+                entity_frac   = 1.0 - hhi * temp
+                semantic_frac = hhi * temp
             # Dilute entity_ids when semantic weight is high (let FAISS/traverse dominate)
             if semantic_frac > 0.3 and entity_ids:
                 entity_list = list(entity_ids)
                 keep = max(1, int(len(entity_list) * entity_frac))
                 entity_ids = set(entity_list[:keep])
-                print(f"[MEMORY QUERY] entity_frac={entity_frac:.2f} semantic_frac={semantic_frac:.2f}", flush=True)
+                print(f"[MEMORY QUERY] entity_frac={entity_frac:.2f} semantic_frac={semantic_frac:.2f} has_actions={has_actions}", flush=True)
 
         # Merge both channels — entity overlap takes priority
         all_overlap_ids = entity_ids | content_ids
