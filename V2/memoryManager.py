@@ -86,23 +86,27 @@ class memoryManager:
         # No actions + high temp = full semantic drift (idle agent should wander)
         # Has actions + high temp + high HHI = drift (bored, repetitive)
         # Has actions + high temp + low HHI = precision (active, diverse)
+        final_entity_ids = entity_ids  # default: use computed entity_ids
         if temp > 0.0:
             if not has_actions:
-                # Idle agent — default to full semantic drift
+                # Idle agent — default to full semantic drift, skip entity channel
                 entity_frac   = 1.0 - temp
                 semantic_frac = temp
+                if semantic_frac > 0.5:
+                    final_entity_ids = None  # disable entity channel entirely
             else:
                 entity_frac   = 1.0 - hhi * temp
                 semantic_frac = hhi * temp
-            # Dilute entity_ids when semantic weight is high (let FAISS/traverse dominate)
-            if semantic_frac > 0.3 and entity_ids:
-                entity_list = list(entity_ids)
-                keep = max(1, int(len(entity_list) * entity_frac))
-                entity_ids = set(entity_list[:keep])
-                print(f"[MEMORY QUERY] entity_frac={entity_frac:.2f} semantic_frac={semantic_frac:.2f} has_actions={has_actions}", flush=True)
+                if semantic_frac > 0.5:
+                    # Dilute entity_ids when semantic weight is high
+                    if entity_ids:
+                        entity_list = list(entity_ids)
+                        keep = max(1, int(len(entity_list) * entity_frac))
+                        final_entity_ids = set(entity_list[:keep])
+            print(f"[MEMORY QUERY] entity_frac={entity_frac:.2f} semantic_frac={semantic_frac:.2f} has_actions={has_actions} entity_ids={'DISABLED' if final_entity_ids is None else len(final_entity_ids)}", flush=True)
 
         # Merge both channels — entity overlap takes priority
-        all_overlap_ids = entity_ids | content_ids
+        all_overlap_ids = final_entity_ids | content_ids if final_entity_ids else content_ids
         ltm_result = self._ltm.queryMemory(coord, k=k,
                          syn_coord=self._spatial._svc.computeWorldValence(text),
                          entity_ids=all_overlap_ids if all_overlap_ids else None)
