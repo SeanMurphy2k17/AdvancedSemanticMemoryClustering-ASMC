@@ -609,7 +609,7 @@ results = memory.get_context("use_key on exit_door", temp=0.1)
 ```
 
 The system automatically computes a **Herfindahl-Hirschman Index (HHI)** from recent STM
-actions to measure behavioral concentration. The \`temp\` parameter scales how much this HHI
+actions to measure behavioral concentration. The `temp` parameter scales how much this HHI
 shifts retrieval from entity-precision to associative semantic drift.
 
 ## Credits
