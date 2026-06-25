@@ -133,6 +133,15 @@ class memoryManager:
                 if neighbour:
                     anchor_chain.append(neighbour)
 
+        # Debug: show what each channel returned
+        print(f"[MEMORY QUERY] RESULTS — stm:{len(stm_result)} ltm:{len(memories)} chain:{len(chain)} semantic:{len(semantic)} anchors:{len(anchors)} anchor_chain:{len(anchor_chain)}", flush=True)
+        for i, m in enumerate(memories[:3]):
+            meta = m.get("metaDataTag", {})
+            print(f"  ltm[{i}] platform={meta.get('platform','?')} action={meta.get('action','')[:40]} input={m.get('inputText','')[:60]}", flush=True)
+        for i, m in enumerate(semantic[:3]):
+            meta = m.get("metaDataTag", {})
+            print(f"  semantic[{i}] platform={meta.get('platform','?')} action={meta.get('action','')[:40]} input={m.get('inputText','')[:60]}", flush=True)
+
         return {
             "stm":          stm_result,
             "ltm_memories": memories,
