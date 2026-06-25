@@ -32,7 +32,8 @@ class memoryManager:
         if to_promote:
             self._ltm.addMemory(to_promote)
 
-    def queryMemory(self, text: str, k: int = 10, layer1_count: int = 6, platform_tag: str = None) -> dict:
+    def queryMemory(self, text: str, k: int = 10, layer1_count: int = 6,
+                    platform_tag: str = None, temp: float = 0.5) -> dict:
         import time as _t
         _t0 = _t.perf_counter()
         print(f"[MEMORY QUERY] Step 1: converting query ({len(text.split())} words) to coordinates...", flush=True)
@@ -59,6 +60,39 @@ class memoryManager:
         content_id_results = self._ltm.resolveContentWords(content_words)
         content_ids = set(content_id_results.keys())
         print(f"[MEMORY QUERY] content overlap: {len(content_ids)} candidate IDs from {len(content_words)} words", flush=True)
+
+        # --- Dynamic temp: compute HHI from recent STM actions ---
+        # HHI measures action concentration in recent memory (0.0 = diverse, 1.0 = monopolized)
+        # temp controls how much HHI shifts retrieval from entity-precision to semantic-drift
+        hhi = 0.0
+        if temp > 0.0 and temp < 1.0:
+            # Only compute HHI when temp is non-trivial (skip at extremes for perf)
+            recent = self._stm.get_recent(10)
+            actions = []
+            for m in recent:
+                meta = m.get("metaDataTag", {})
+                action = meta.get("action", "")
+                if action:
+                    actions.append(action.split()[0] if action else "")
+            if actions:
+                from collections import Counter
+                counts = Counter(actions)
+                total = len(actions)
+                hhi = sum(c * c for c in counts.values()) / (total * total)
+                print(f"[MEMORY QUERY] HHI={hhi:.3f} temp={temp} ({len(actions)} actions, {len(counts)} unique)", flush=True)
+
+        # Apply temp-weighted channel balance
+        # temp=0.0 → 100% entity precision, temp=1.0 → full HHI-driven drift
+        # entity_weight = 1.0 - hhi*temp, semantic_weight = hhi*temp
+        if temp > 0.0:
+            entity_frac   = 1.0 - hhi * temp
+            semantic_frac = hhi * temp
+            # Dilute entity_ids when semantic weight is high (let FAISS/traverse dominate)
+            if semantic_frac > 0.3 and entity_ids:
+                entity_list = list(entity_ids)
+                keep = max(1, int(len(entity_list) * entity_frac))
+                entity_ids = set(entity_list[:keep])
+                print(f"[MEMORY QUERY] entity_frac={entity_frac:.2f} semantic_frac={semantic_frac:.2f}", flush=True)
 
         # Merge both channels — entity overlap takes priority
         all_overlap_ids = entity_ids | content_ids

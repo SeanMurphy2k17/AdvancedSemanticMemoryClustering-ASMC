@@ -92,17 +92,22 @@ class AdvancedSemanticMemory:
         return {"success": True, "anchor_id": anchor_id}
 
     def get_context(self, query: str, layer1_count: int = 10,
-                    layer2_count: int = 12, complexity: int = 5, platform_tag: str = None) -> dict:
+                    layer2_count: int = 12, complexity: int = 5,
+                    platform_tag: str = None, temp: float = 0.5) -> dict:
         """
         Retrieve layered context for a query.
-            
+
+        temp: memory retrieval temperature (0.0 = entity-precision, 1.0 = semantic-drift)
+              0.5 is balanced (default). Higher temp lets repetition drive associative retrieval.
+
         Returns:
             layer1        — STM results (recent + semantically close)
             layer2        — LTM memory results (semantic FAISS search)
             anchors       — LTM anchor nodes found in same FAISS search
             anchor_chain  — structurally adjacent anchors (one graph hop)
         """
-        result = self._mm.queryMemory(query, k=layer2_count, layer1_count=layer1_count, platform_tag=platform_tag)
+        result = self._mm.queryMemory(query, k=layer2_count, layer1_count=layer1_count,
+                                       platform_tag=platform_tag, temp=temp)
         return {
             "query":          query,
             "layer1":         result["stm"],
