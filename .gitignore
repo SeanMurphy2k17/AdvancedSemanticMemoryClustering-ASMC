@@ -16,3 +16,8 @@ V2/MemoryStructures/LTM/counter.json
 # Test data / editor state
 *.pdf
 imgui.ini
+
+# More runtime state (2026-11): per-platform cursors, atomic-write temp files, local backups
+V2/MemoryStructures/LTM/platform_cursors.json
+V2/MemoryStructures/LTM/*.tmp
+V2/.orig-*/
