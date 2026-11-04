@@ -21,3 +21,6 @@ imgui.ini
 V2/MemoryStructures/LTM/platform_cursors.json
 V2/MemoryStructures/LTM/*.tmp
 V2/.orig-*/
+
+# The word cache data is committed on purpose; its LMDB lock file is not data
+V2/MemoryStructures/word_cache.lmdb/lock.mdb
