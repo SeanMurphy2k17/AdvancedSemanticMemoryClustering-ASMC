@@ -1,5 +1,6 @@
 import json
 import math
+from itertools import zip_longest
 import os
 import threading
 
@@ -253,9 +254,9 @@ class longTermMemory:
                 if meta.get("type") == "scm_anchor":
                     continue
                 mem_id = meta.get("ltm_id")
-                if not mem_id:
+                if mem_id is None:
                     continue
-                cw = mem.get("contentWords", [])
+                cw = list(dict.fromkeys((mem.get("contentWords") or []) + (mem.get("responseWords") or [])))
                 if cw:
                     self._index_content_words(mem_id, cw, txn=txn)
                     cw_count += len(set(cw))
@@ -314,7 +315,8 @@ class longTermMemory:
         factual_tags = memory.get("factualTags")
         if factual_tags:
             self._index_entities(mem_id, factual_tags)
-        content_words = memory.get("contentWords", [])
+        # Index words from the prompt and the answer: what was decided is usually in the answer.
+        content_words = list(dict.fromkeys((memory.get("contentWords") or []) + (memory.get("responseWords") or [])))
         if content_words:
             self._index_content_words(mem_id, content_words)
 
@@ -378,28 +380,35 @@ class longTermMemory:
             candidates = self._syn_rerank(candidates, syn_coord)
 
         direct   = [m for _, m in candidates[:k]]
-        seen_ids = set(int(i) for i in I[0] if i != -1)
+        seen_ids = {int(m["metaDataTag"]["ltm_id"]) for m in direct if "ltm_id" in m.get("metaDataTag", {})}
         print(f"[LTM.queryMemory:{_tid}] faiss+decode direct: {_t.perf_counter()-_q0:.3f}s", flush=True)
 
-        # Merge entity-retrieved memories (overlap channel)
+        # Overlap channel (entity / content-word hits), kept in the caller's rank order.
         _q1 = _t.perf_counter()
         entity_direct = []
-        needed = max(0, k - len(direct))
-        if entity_ids and needed:
-            entity_set = set(entity_ids)
+        if entity_ids:
             with self._env.begin() as txn:
-                for eid in entity_set:
-                    if len(entity_direct) >= needed:
-                        break
+                for eid in entity_ids:
+                    eid = int(eid)
                     if eid in seen_ids:
                         continue
                     raw = txn.get(str(eid).encode())
                     if raw:
-                        mem = json.loads(raw)
-                        entity_direct.append(mem)
+                        entity_direct.append(json.loads(raw))
                         seen_ids.add(eid)
 
-        direct = direct + entity_direct  # already capped at `needed`
+        # Interleave, overlap first: an exact word or entity match is stronger
+        # evidence than valence proximity. Appending overlap hits only into the
+        # slots FAISS left free dropped them entirely once the index held more
+        # than k memories (measured: self-query recall@6 0.14 -> 0.92 on one
+        # store, 0.09 -> 0.47 on another).
+        merged = []
+        for pair in zip_longest(entity_direct, direct):
+            for m in pair:
+                if m is not None:
+                    merged.append(m)
+        direct = merged[:k]
+        seen_ids = {int(m["metaDataTag"]["ltm_id"]) for m in direct if "ltm_id" in m.get("metaDataTag", {})}
         print(f"[LTM.queryMemory:{_tid}] entity merge: {_t.perf_counter()-_q1:.3f}s (entity_ids={len(entity_ids) if entity_ids else 0})", flush=True)
 
         # Spider: stitch links before chain traversal so traversal follows more edges
@@ -422,6 +431,7 @@ class longTermMemory:
         total_links = len(all_positions)
 
         chain = []
+        seen_texts = {m.get("inputText", "") for m in direct}
         if all_positions:
             batch = np.vstack([self._encode(p) for p in all_positions])
             _, I_batch = self._index.search(batch, 1)
@@ -431,9 +441,16 @@ class longTermMemory:
                     if linked_id == -1 or linked_id in seen_ids:
                         continue
                     raw = txn.get(str(linked_id).encode())
-                    if raw:
-                        chain.append(json.loads(raw))
-                        seen_ids.add(linked_id)
+                    if not raw:
+                        continue
+                    linked = json.loads(raw)
+                    seen_ids.add(linked_id)
+                    # Same text stored more than once (a harness re-sending a message
+                    # across restarts) would otherwise fill consecutive chain slots.
+                    if linked.get("inputText", "") in seen_texts:
+                        continue
+                    seen_texts.add(linked.get("inputText", ""))
+                    chain.append(linked)
         print(f"[LTM.queryMemory:{_tid}] chain traversal: {_t.perf_counter()-_q3:.3f}s (total_links={total_links}, chain={len(chain)})", flush=True)
 
         return {"direct": direct, "chain": chain}
@@ -594,18 +611,20 @@ class longTermMemory:
         if not content_words:
             return {}
         query_set = set(content_words)
-        # Aggregate mem_id -> count across all query words via index (O(1) per word)
+        total = max(self._index.ntotal, 1)
+        # Aggregate mem_id -> score across query words; a word that appears in few
+        # memories counts for more than one that appears in most ("do" vs "faiss").
         mem_scores = {}
         with self._env.begin() as txn:
             for word in query_set:
-                key = self._cw_key(word)
-                raw = txn.get(key)
-                if raw:
-                    mem_ids = json.loads(raw)
-                    for mid in mem_ids:
-                        mem_scores[mid] = mem_scores.get(mid, 0) + 1
-        # Sort by overlap count descending, return top_n
-        sorted_results = sorted(mem_scores.items(), key=lambda x: x[1], reverse=True)
+                raw = txn.get(self._cw_key(word))
+                if not raw:
+                    continue
+                mem_ids = json.loads(raw)
+                weight = math.log(1.0 + total / max(len(mem_ids), 1))
+                for mid in mem_ids:
+                    mem_scores[mid] = mem_scores.get(mid, 0.0) + weight
+        sorted_results = sorted(mem_scores.items(), key=lambda x: (-x[1], x[0]))
         return dict(sorted_results[:top_n])
 
     def semanticTraverse(self, start_memories: list, query_words: list,

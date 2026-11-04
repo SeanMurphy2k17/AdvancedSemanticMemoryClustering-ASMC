@@ -44,8 +44,30 @@ class memoryManager:
         _t1 = _t.perf_counter()
         stm_spatial = self._stm.queryMemory(coord)
         stm_recent  = self._stm.get_recent(layer1_count)
-        seen        = {id(m) for m in stm_spatial}
-        stm_result  = stm_spatial + [m for m in stm_recent if id(m) not in seen]
+        # Exact-word overlap inside the short-term window too. The inverted index
+        # covers long-term memory only, so without this a thing said an hour ago
+        # could be found only by valence proximity. Words are weighted by how
+        # few window entries contain them, so "do" does not outrank "faiss".
+        stm_overlap = []
+        q_words = set(self._spatial._svc.extractContentWords(text))
+        if q_words:
+            window = self._stm.get_recent(self._stm.STM_MAX)
+            df = {}
+            for m in window:
+                for w in set(m.get("contentWords") or []) | set(m.get("responseWords") or []):
+                    df[w] = df.get(w, 0) + 1
+            scored = []
+            for m in window:
+                words = set(m.get("contentWords") or []) | set(m.get("responseWords") or [])
+                score = sum(1.0 / df[w] for w in q_words & words)
+                if score > 0:
+                    scored.append((score, m))
+            scored.sort(key=lambda t: -t[0])
+            stm_overlap = [m for _, m in scored[:layer1_count]]
+        seen        = {id(m) for m in stm_overlap}
+        stm_result  = stm_overlap + [m for m in stm_spatial if id(m) not in seen]
+        seen       |= {id(m) for m in stm_spatial}
+        stm_result += [m for m in stm_recent if id(m) not in seen]
         print(f"[MEMORY QUERY:{_tid}] Step 3: searching long-term memory... (step 2 took {_t.perf_counter()-_t1:.2f}s)", flush=True)
         _t2 = _t.perf_counter()
 
@@ -109,15 +131,20 @@ class memoryManager:
                         final_entity_ids = set(entity_list[:keep])
             print(f"[MEMORY QUERY:{_tid}] entity_frac={entity_frac:.2f} semantic_frac={semantic_frac:.2f} has_actions={has_actions} entity_ids={'DISABLED' if final_entity_ids is None else len(final_entity_ids)}", flush=True)
 
-        # Merge both channels — entity overlap takes priority
-        all_overlap_ids = final_entity_ids | content_ids if final_entity_ids else content_ids
+        # Merge both overlap channels into one ranked list: content-word hits
+        # first (IDF-ranked, exact words), entity hits after. The entity tagger is
+        # noisy on chat text ("alright" as a location), so its hits should not take
+        # slots ahead of a rare-word match. The LTM query keeps this order and
+        # interleaves it with the FAISS results instead of appending leftovers.
+        ranked = list(content_id_results)
+        ranked += [mid for mid in sorted(final_entity_ids or []) if mid not in ranked]
         _t5 = _t.perf_counter()
         syn_coord = self._spatial._svc.computeWorldValence(text)
         print(f"[MEMORY QUERY:{_tid}] computeWorldValence: {_t.perf_counter()-_t5:.2f}s", flush=True)
         _t6 = _t.perf_counter()
         ltm_result = self._ltm.queryMemory(coord, k=k,
                          syn_coord=syn_coord,
-                         entity_ids=all_overlap_ids if all_overlap_ids else None)
+                         entity_ids=ranked or None)
         print(f"[MEMORY QUERY:{_tid}] ltm.queryMemory call: {_t.perf_counter()-_t6:.2f}s", flush=True)
         print(f"[MEMORY QUERY:{_tid}] done. Total query time: {_t.perf_counter()-_t0:.2f}s", flush=True)
 
