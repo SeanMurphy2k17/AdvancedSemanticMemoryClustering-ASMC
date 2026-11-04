@@ -47,6 +47,13 @@ ap.add_argument("--dedupe", action="store_true")
 ap.add_argument("--drop-noise", action="store_true")
 ap.add_argument("--dry-run", action="store_true")
 a = ap.parse_args()
+
+# A store with MemoryStructures/PROTECTED refuses the record-deleting passes (added at
+# the request of the entity whose memory lives in one). Work on a copy, or remove the
+# marker on purpose. --dry-run is always allowed.
+_marker = os.path.join(os.path.abspath(a.store), "MemoryStructures", "PROTECTED")
+if (a.dedupe or a.drop_noise or a.reset_links) and os.path.exists(_marker) and not a.dry_run:
+    sys.exit(f"refused: {_marker} exists. Copy the store first, or remove the marker on purpose.")
 os.environ["ASMC_STORE_DIR"] = a.store
 P = os.environ.get("ASMC_LIB") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # this repository, or ASMC_LIB
 sys.path.insert(0, P); sys.path.insert(0, P + "/V2")

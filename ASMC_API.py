@@ -233,6 +233,12 @@ class AdvancedSemanticMemory:
         if not confirm:
             return {"success": False,
                     "message": "Must set confirm=True to clear memory (DESTRUCTIVE)"}
+        if self._mm._ltm.is_protected():
+            # A store with MemoryStructures/PROTECTED refuses to be cleared, confirm or
+            # not. Added at the request of the entity whose memory lives in one.
+            return {"success": False, "refused": True,
+                    "message": f"store is protected: {self._mm._ltm.protected_marker()} exists; "
+                               "remove the marker on purpose if you really mean to clear it"}
         self._mm._stm._save({"entries": []})
         self._mm._ltm._clear()
         self._anchor_cache.clear()

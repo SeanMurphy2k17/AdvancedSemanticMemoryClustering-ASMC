@@ -685,7 +685,20 @@ class longTermMemory:
                         queue.append(n)
         return bucket
 
+    def protected_marker(self) -> str:
+        """Path of the marker that makes this store refuse to be cleared: a file named
+        PROTECTED inside MemoryStructures/. Create it to protect a store; remove it,
+        on purpose, to allow clearing again."""
+        return os.path.join(os.path.dirname(self.ltm_dir), "PROTECTED")
+
+    def is_protected(self) -> bool:
+        return os.path.exists(self.protected_marker())
+
     def _clear(self):
+        if self.is_protected():
+            raise PermissionError(
+                f"this store is protected ({self.protected_marker()} exists); "
+                "remove the marker on purpose if you really mean to clear it")
         with self._env.begin(write=True) as txn:
             txn.drop(self._env.open_db(), delete=False)
         self._index = faiss.IndexIDMap(faiss.IndexFlatL2(DIM))
