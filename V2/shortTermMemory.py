@@ -10,7 +10,11 @@ class shortTermMemory:
     STM_RADIUS = 0.05
 
     def __init__(self):
-        base          = os.path.dirname(os.path.abspath(__file__))
+        # ASMC_STORE_DIR lets multiple independent instances of this same
+        # vendored module (e.g. one per Discord bot persona) each get their
+        # own storage instead of all colliding on the module's own file
+        # location -- unset, behavior is unchanged from upstream.
+        base          = os.environ.get("ASMC_STORE_DIR") or os.path.dirname(os.path.abspath(__file__))
         self.stm_dir  = os.path.join(base, "MemoryStructures", "STM")
         self.stm_path = os.path.join(self.stm_dir, "stm.json")
         os.makedirs(self.stm_dir, exist_ok=True)
@@ -113,12 +117,23 @@ class shortTermMemory:
             memory["linkedMemories"] = links
             self._entries.append(memory)
             self._ckpt_counter += 1
-            if self._ckpt_counter >= self._ckpt_every:
-                self._checkpoint()
-                self._ckpt_counter = 0
+            # The periodic checkpoint used to be written here, before the pop. A
+            # file that still named an entry on its way to long-term memory was
+            # promoted twice after an unclean death, and the window stayed one over
+            # its maximum for good. The manager now calls checkpoint_if_due() after
+            # the long-term write.
             if len(self._entries) > self.STM_MAX:
                 return self._entries.pop(0)
             return None
+
+    def checkpoint_if_due(self, force: bool = False) -> None:
+        """Write the window to disk every few adds, and always when `force` is
+        set: the caller passes True right after a promotion, so the file on
+        disk never names an entry that long-term memory already holds."""
+        with self._lock:
+            if force or self._ckpt_counter >= self._ckpt_every:
+                self._checkpoint()
+                self._ckpt_counter = 0
 
     def count(self) -> int:
         with self._lock:

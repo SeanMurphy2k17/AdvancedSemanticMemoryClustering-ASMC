@@ -1,3 +1,5 @@
+import json
+import threading
 from memorySpatial import memorySpatial
 from shortTermMemory import shortTermMemory
 from longTermMemory import longTermMemory
@@ -10,13 +12,57 @@ class memoryManager:
         self._stm     = shortTermMemory()
         self._ltm     = longTermMemory()
         self._scm     = spatialCompMap(self._ltm)
+        # One lock around the two entry points. Callers that use threads raced
+        # queryMemory against addMemory over a FAISS index that has no locking
+        # of its own; an add/write racing a search is native undefined
+        # behaviour and showed up as a segfault.
+        self._lock = threading.RLock()
+        self._drain_overflow()
         print(f"initialized {self.__class__.__name__}")
+
+    def _ltm_has(self, entry: dict) -> bool:
+        key = (entry.get("inputText") or "", entry.get("timeDate") or "")
+        with self._ltm._env.begin() as txn:
+            for k, v in txn.cursor():
+                if not k.isdigit():
+                    continue
+                try:
+                    m = json.loads(v)
+                except ValueError:
+                    continue
+                if (m.get("inputText") or "", m.get("timeDate") or "") == key:
+                    return True
+        return False
+
+    def _drain_overflow(self) -> None:
+        """A short-term file left by an unclean death can hold more entries than
+        the window allows (and, before checkpoint_if_due, an entry already
+        promoted). Promote the extras on open, skipping ones long-term memory
+        already holds, so the window never stays over its maximum."""
+        promoted = skipped = 0
+        while self._stm.count() > self._stm.STM_MAX:
+            oldest = self._stm.pop_oldest()
+            if oldest is None:
+                break
+            if self._ltm_has(oldest):
+                skipped += 1
+            else:
+                self._ltm.addMemory(oldest)
+                promoted += 1
+        if promoted or skipped:
+            self._stm._checkpoint()
+            print(f"[STM] window drained on open: promoted={promoted} already_in_ltm={skipped}", flush=True)
 
     def get_recent(self, n: int, metadata_filter: dict = None) -> list:
         return self._stm.get_recent(n, metadata_filter=metadata_filter)
 
     def addMemory(self, inputText: str, responseText: str,
                   metaDataTag: dict = None, anchor_id: int = None):
+        with self._lock:
+            return self._addMemory(inputText, responseText, metaDataTag, anchor_id)
+
+    def _addMemory(self, inputText: str, responseText: str,
+                   metaDataTag: dict = None, anchor_id: int = None):
         meta   = dict(metaDataTag or {})
         memory = self._spatial.buildMemoryObject(
             inputText    = inputText,
@@ -31,9 +77,18 @@ class memoryManager:
         to_promote = self._stm.addMemory(memory)
         if to_promote:
             self._ltm.addMemory(to_promote)
+        # After the long-term write, and always on a promotion: the window file
+        # then never names an entry long-term memory already holds, whatever
+        # happens to the process next.
+        self._stm.checkpoint_if_due(force=to_promote is not None)
 
     def queryMemory(self, text: str, k: int = 10, layer1_count: int = 6,
                     platform_tag: str = None, temp: float = 0.5) -> dict:
+        with self._lock:
+            return self._queryMemory(text, k, layer1_count, platform_tag, temp)
+
+    def _queryMemory(self, text: str, k: int = 10, layer1_count: int = 6,
+                     platform_tag: str = None, temp: float = 0.5) -> dict:
         import time as _t
         import threading as _th
         _tid = _th.current_thread().name
