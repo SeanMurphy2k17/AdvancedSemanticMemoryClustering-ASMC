@@ -209,6 +209,34 @@ python -c "import nltk; nltk.download('sentiwordnet'); nltk.download('wordnet');
 
 ---
 
+## Retrieval, settings and tools (2026-11)
+
+A query answers from three channels: FAISS neighbours in the 6D space, exact
+entity matches, and exact content-word matches weighted by rarity. The
+channels are interleaved in rank order, so an exact match is never pushed
+out by a valence neighbour and a valence neighbour is never pushed out by an
+exact match; both kinds of memory reach the caller. The short-term window is
+searched the same way. `CHANGELOG.md` has the measurements.
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `ASMC_STORE_DIR` | the package folder | Where the window, the long-term store and the word cache live; `create_memory(db_path=...)` sets it |
+| `ASMC_STITCH_NEIGHBOURS` | 5 | Nearest memories each new memory is linked to; raise it for a wide space or a denser wander |
+| `ASMC_STITCH_MAX_DIST` | 0.40 | Never link by proximity beyond this |
+| `ASMC_FAISS_THREADS` | 1 | Threads FAISS may use; one is right for a flat index of a few hundred small vectors |
+
+Tools:
+
+- `python tools/migrate_store.py --store <dir> --dry-run` brings a store
+  written by an older version up to this one (answer words indexed) and can
+  remove exact duplicate records, drain an over-full window, drop harness
+  text stored as experiences, or rebuild the web. Run it with the owning
+  process stopped; the dry run prints the plan and changes nothing.
+- `python tools/bench_self_query.py --store <copy>` measures how well a store
+  finds its own memories. Run it on a copy.
+- `python tests/test_window_checkpoint.py` checks the window and promotion
+  invariants against a throwaway store.
+
 ## API Reference
 
 ### Core Methods
