@@ -19,6 +19,13 @@ LTM_MAP_SIZE = 10 * 1024 * 1024 * 1024
 GENERIC_ENTITY_THRESHOLD = 500
 
 
+# Proximity links per memory: the nearest few, not everything inside a radius.
+# A denser web gives the traversal more to wander along (texture); a sparser one
+# keeps links meaningful in a store whose memories all sit close together.
+# Set ASMC_STITCH_NEIGHBOURS per store; 5 suits a tight space, 10-12 a wide one.
+STITCH_NEIGHBOURS = int(os.environ.get("ASMC_STITCH_NEIGHBOURS", "5"))
+STITCH_MAX_DIST   = float(os.environ.get("ASMC_STITCH_MAX_DIST", "0.40"))  # never link by proximity beyond this
+
 class longTermMemory:
     def __init__(self):
         base             = os.path.dirname(os.path.abspath(__file__))
@@ -31,6 +38,11 @@ class longTermMemory:
 
         self._env = lmdb.open(self.ltm_dir, map_size=LTM_MAP_SIZE)
 
+        # One thread for a flat index of a few hundred 6-dim vectors: the search is
+        # microseconds, and FAISS's default OpenMP fan-out made each of the hundreds
+        # of per-link searches a query performs wait behind whatever else loads the
+        # machine (measured: 725 searches, 23 ms each, 16.7 s of an 18 s query).
+        faiss.omp_set_num_threads(int(os.environ.get("ASMC_FAISS_THREADS", "1")))
         if os.path.exists(self.faiss_path):
             self._index = faiss.read_index(self.faiss_path)
         else:
@@ -455,7 +467,7 @@ class longTermMemory:
 
         return {"direct": direct, "chain": chain}
 
-    def _stitch(self, direct_results, k=20):
+    def _stitch(self, direct_results, k=12):
         """
         For each direct result, find nearby LTM memories and add links.
         Called BEFORE chain traversal so the traversal follows more edges.
@@ -470,7 +482,7 @@ class longTermMemory:
                 if meta.get("type") == "scm_anchor":
                     continue
                 mem_id = meta.get("ltm_id")
-                if not mem_id:
+                if mem_id is None:  # 0 is a valid id
                     continue
                 mem_pos = mem.get("responsePos")
                 if not mem_pos:
@@ -502,6 +514,7 @@ class longTermMemory:
 
                 # Track candidates that need reverse-link updates
                 cand_updates = {}  # cand_id -> updated cand dict
+                prox_links = len(existing)  # proximity links this memory already has
 
                 for dist, cand_id in zip(D[0], I[0]):
                     if cand_id == -1 or cand_id == mem_id:
@@ -540,14 +553,20 @@ class longTermMemory:
                         should_link = True
 
                     if not should_link:
-                        # Existing proximity check
+                        # Proximity: the nearest few, not everything inside a fixed
+                        # radius. In a store whose memories all sit within ~0.25 of
+                        # each other, a 0.40 radius linked every memory to every
+                        # other and the web carried no information.
+                        if prox_links >= STITCH_NEIGHBOURS:
+                            continue
                         raw_dist = math.sqrt(sum((a - b) ** 2
                                                  for a, b in zip(mem_pos, cand_pos)))
-                        if raw_dist > 0.40:
+                        if raw_dist > STITCH_MAX_DIST:
                             continue
                         if tuple(cand_pos) in existing:
                             continue
                         should_link = True
+                        prox_links += 1
 
                     if should_link:
                         existing.add(tuple(cand_pos))
