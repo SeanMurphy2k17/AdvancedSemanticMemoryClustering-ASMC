@@ -88,6 +88,16 @@ class spatialValenceCompute(metaclass=_SVCMeta):
 
         self._domain_cache = {}
         self._word_cache   = {}   # session-level hot cache: (lemma, pos) → 7-tuple
+        self._pos_cache    = {}   # (text, lower) → (tokens, pos_tags); bounds a single
+                                  # request's redundant tokenize+pos_tag passes over the
+                                  # same text (computeSpatialValence/extractContentWords/
+                                  # computeWorldValence/extractFactualTags all need it)
+        self._factual_cache = {}  # line text → (entities, dates, quantities, technicals).
+                                  # Query text is mostly repeated boilerplate (mission text,
+                                  # headers) with only a few dynamic lines changing per cycle,
+                                  # so caching per-line lets the unchanged lines skip
+                                  # re-extraction entirely instead of invalidating on any
+                                  # single changed character elsewhere in the blob.
         self._lemmatizer   = WordNetLemmatizer()
         self._spell        = SpellChecker()
         os.makedirs(_CACHE_DIR, exist_ok=True)
@@ -159,6 +169,23 @@ class spatialValenceCompute(metaclass=_SVCMeta):
     def _relate_i(self, s)  -> float:
         return self._wup_axis(s, _NOUN_RELATION, _NOUN_OBJECT,   _VERB_RELATE, _VERB_USE,    'i')
 
+    def _tokenize_and_tag(self, text: str, lower: bool = True):
+        """Memoized nltk.word_tokenize + nltk.pos_tag. pos_tag is ~0.5s per call
+        (pure-Python, no internal caching), and the same query text otherwise
+        gets tokenized+tagged repeatedly across computeSpatialValence,
+        extractContentWords, computeWorldValence and extractFactualTags."""
+        key = (text, lower)
+        cached = self._pos_cache.get(key)
+        if cached is not None:
+            return cached
+        tokens   = nltk.word_tokenize(text.lower() if lower else text)
+        pos_tags = nltk.pos_tag(tokens)
+        result = (tokens, pos_tags)
+        self._pos_cache[key] = result
+        if len(self._pos_cache) > 32:
+            self._pos_cache.pop(next(iter(self._pos_cache)))
+        return result
+
     def _hypernym_chain(self, synset) -> list:
         if synset is None:
             return []
@@ -180,8 +207,7 @@ class spatialValenceCompute(metaclass=_SVCMeta):
         return chain
 
     def computeSpatialValence(self, text: str) -> tuple:
-        tokens   = nltk.word_tokenize(text.lower())
-        pos_tags = nltk.pos_tag(tokens)
+        tokens, pos_tags = self._tokenize_and_tag(text, lower=True)
 
         x_acc = y_acc = z_acc = a_acc = b_acc = c_acc = w_total = 0.0
 
@@ -261,8 +287,7 @@ class spatialValenceCompute(metaclass=_SVCMeta):
         return (x, y, z, a, b, c)
 
     def extractContentWords(self, text: str) -> list:
-        tokens   = nltk.word_tokenize(text.lower())
-        pos_tags = nltk.pos_tag(tokens)
+        tokens, pos_tags = self._tokenize_and_tag(text, lower=True)
         words = []
         for word, tag in pos_tags:
             if not word.isalpha():
@@ -276,8 +301,7 @@ class spatialValenceCompute(metaclass=_SVCMeta):
         return words
 
     def computeWorldValence(self, text: str) -> tuple:
-        tokens   = nltk.word_tokenize(text.lower())
-        pos_tags = nltk.pos_tag(tokens)
+        tokens, pos_tags = self._tokenize_and_tag(text, lower=True)
         j_acc = k_acc = l_acc = m_acc = n_acc = o_acc = w_total = 0.0
         r = lambda v: round(max(-1.0, min(1.0, v)), 6)
         for word, tag in pos_tags:
@@ -311,60 +335,48 @@ class spatialValenceCompute(metaclass=_SVCMeta):
         )
 
     def extractFactualTags(self, text: str) -> dict:
-        """Extract factual entities from text using only NLTK — no ML.
-        Returns dict with entities, dates, quantities, technical_terms.
-        If no entities found, returns empty lists ("unknown" marker).
+        """Extract factual entities from text. Returns dict with entities,
+        dates, quantities, technical_terms.
+
+        Deliberately does NOT use NLTK's ne_chunk — its maxent classifier
+        costs ~0.4-0.5s per call regardless of text length (measured), which
+        dominated ASMC query latency. Instead, consecutive proper-noun
+        (NNP/NNPS) tokens are merged into multi-word 'entities' and lone
+        proper nouns become 'technical_terms' — a POS-based grouping instead
+        of a trained classifier. This can't distinguish person/org/location
+        the way ne_chunk did (those all collapse into one generic 'entity'
+        type), but the reverse index only needs a stable, repeatable
+        (type, text) key, not a semantically "correct" label, and this runs
+        in the sub-millisecond range instead of hundreds of ms.
+
+        Cached per line (not per full text): the callers here are typically
+        cycle-to-cycle sensor/mission blobs where most lines repeat verbatim
+        and only a few change, so per-line memoization skips re-tagging
+        unchanged lines instead of invalidating on any single changed
+        character elsewhere in the blob.
         """
         import re
-        from nltk import ne_chunk, pos_tag, word_tokenize
 
-        tokens   = word_tokenize(text)
-        pos_tags = pos_tag(tokens)
-        tree     = ne_chunk(pos_tags)
+        entities   = []
+        dates      = []
+        quantities = []
+        technicals = []
 
-        entities     = []
-        dates        = []
-        quantities   = []
-        technicals   = []
-        seen_words   = set()
-
-        # Named entities via NLTK ne_chunk
-        for chunk in tree:
-            if hasattr(chunk, 'label'):
-                label  = chunk.label()
-                etext  = ' '.join(c[0] if isinstance(c, tuple) else str(c) for c in chunk)
-                if label == 'PERSON':
-                    entities.append(('person', etext.lower()))
-                    seen_words.update(etext.lower().split())
-                elif label == 'ORGANIZATION':
-                    entities.append(('organization', etext.lower()))
-                    seen_words.update(etext.lower().split())
-                elif label == 'GPE':
-                    entities.append(('location', etext.lower()))
-                    seen_words.update(etext.lower().split())
-                elif label == 'DATE':
-                    dates.append(('date', etext.lower()))
-
-        # Dates: month names + 4-digit year
-        for m in re.finditer(
-            r'((?:January|February|March|April|May|June|'
-            r'July|August|September|October|November|December)'
-            r'\s*\d{1,2})[,]?\s*(\d{4})?', text, re.IGNORECASE
-        ):
-            dates.append(('date', m.group(0).strip(',').lower()))
-
-        # Quantities: numbers with units
-        for m in re.finditer(
-            r'(\d+(?:\.\d+)?)\s*'
-            r'(?:hours?|days?|weeks?|months?|years?|percent|'
-            r'mb|gb|kb|ms|seconds?|am|pm|kg|lbs?)', text, re.IGNORECASE
-        ):
-            quantities.append(('quantity', m.group(0).strip().lower()))
-
-        # Technical terms: proper nouns not already captured as entities
-        for word, tag in pos_tags:
-            if tag == 'NNP' and word.lower() not in seen_words:
-                technicals.append(('technical', word.lower()))
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            cached = self._factual_cache.get(line)
+            if cached is None:
+                cached = self._extract_factual_tags_line(line)
+                self._factual_cache[line] = cached
+                if len(self._factual_cache) > 256:
+                    self._factual_cache.pop(next(iter(self._factual_cache)))
+            e, d, q, t = cached
+            entities.extend(e)
+            dates.extend(d)
+            quantities.extend(q)
+            technicals.extend(t)
 
         return {
             'entities':       entities,
@@ -372,6 +384,56 @@ class spatialValenceCompute(metaclass=_SVCMeta):
             'quantities':     quantities,
             'technical_terms': technicals,
         }
+
+    def _extract_factual_tags_line(self, line: str) -> tuple:
+        """Single-line factual-tag extraction (see extractFactualTags)."""
+        import re
+
+        tokens, pos_tags = self._tokenize_and_tag(line, lower=False)
+
+        entities   = []
+        dates      = []
+        quantities = []
+        technicals = []
+
+        # Merge consecutive proper-noun tokens into entity phrases instead
+        # of classifying via ne_chunk.
+        i = 0
+        n = len(pos_tags)
+        while i < n:
+            word, tag = pos_tags[i]
+            if tag in ('NNP', 'NNPS'):
+                phrase = [word]
+                j = i + 1
+                while j < n and pos_tags[j][1] in ('NNP', 'NNPS'):
+                    phrase.append(pos_tags[j][0])
+                    j += 1
+                etext = ' '.join(phrase).lower()
+                if len(phrase) > 1:
+                    entities.append(('entity', etext))
+                else:
+                    technicals.append(('technical', etext))
+                i = j
+            else:
+                i += 1
+
+        # Dates: month names + 4-digit year
+        for m in re.finditer(
+            r'((?:January|February|March|April|May|June|'
+            r'July|August|September|October|November|December)'
+            r'\s*\d{1,2})[,]?\s*(\d{4})?', line, re.IGNORECASE
+        ):
+            dates.append(('date', m.group(0).strip(',').lower()))
+
+        # Quantities: numbers with units
+        for m in re.finditer(
+            r'(\d+(?:\.\d+)?)\s*'
+            r'(?:hours?|days?|weeks?|months?|years?|percent|'
+            r'mb|gb|kb|ms|seconds?|am|pm|kg|lbs?)', line, re.IGNORECASE
+        ):
+            quantities.append(('quantity', m.group(0).strip().lower()))
+
+        return entities, dates, quantities, technicals
 
 
 if __name__ == "__main__":

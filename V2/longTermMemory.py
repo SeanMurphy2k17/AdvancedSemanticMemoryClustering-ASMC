@@ -12,6 +12,10 @@ from spatialValenceCompute import spatialValenceCompute
 FUZZINESS    = 0.4
 DIM          = 6
 LTM_MAP_SIZE = 10 * 1024 * 1024 * 1024
+# Entities whose reverse-index posting list exceeds this are treated as
+# stopword-like false positives (e.g. templated text repeating "Level"/"Room")
+# rather than genuine named entities, and are dropped at query time.
+GENERIC_ENTITY_THRESHOLD = 500
 
 
 class longTermMemory:
@@ -265,13 +269,28 @@ class longTermMemory:
 
     def _load_counter(self) -> int:
         if os.path.exists(self.counter_path):
-            with open(self.counter_path, "r") as f:
-                return json.load(f).get("next_id", 0)
+            try:
+                with open(self.counter_path, "r") as f:
+                    return json.load(f).get("next_id", 0)
+            except (json.JSONDecodeError, OSError) as e:
+                # counter.json can be left empty/corrupt if the process was
+                # killed mid-write (the old _save_counter truncated in place
+                # before writing). Recover by trusting FAISS's ntotal, which
+                # is only ever written after a full addMemory() completes.
+                recovered = int(self._index.ntotal)
+                print(f"[LTM] ⚠ counter.json unreadable ({e}) — recovering "
+                      f"next_id={recovered} from FAISS index", flush=True)
+                return recovered
         return 0
 
     def _save_counter(self):
-        with open(self.counter_path, "w") as f:
+        # Atomic write: a plain open(path, "w") truncates the file before
+        # writing, so a crash mid-write leaves an empty/corrupt counter.json.
+        # Write to a temp file in the same dir and rename over it instead.
+        tmp_path = self.counter_path + ".tmp"
+        with open(tmp_path, "w") as f:
             json.dump({"next_id": self._next_id}, f)
+        os.replace(tmp_path, self.counter_path)
 
     def _encode(self, coord) -> np.ndarray:
         v = np.array(coord, dtype=np.float32)
@@ -338,6 +357,10 @@ class longTermMemory:
         return scored
 
     def queryMemory(self, inputCoord, k: int = 10, syn_coord=None, entity_ids=None) -> dict:
+        import time as _t
+        import threading as _th
+        _tid = _th.current_thread().name
+        _q0 = _t.perf_counter()
         q        = self._encode(inputCoord)
         search_k = min(k * 4, max(self._index.ntotal, 1))
         D, I     = self._index.search(q, search_k)
@@ -356,13 +379,18 @@ class longTermMemory:
 
         direct   = [m for _, m in candidates[:k]]
         seen_ids = set(int(i) for i in I[0] if i != -1)
+        print(f"[LTM.queryMemory:{_tid}] faiss+decode direct: {_t.perf_counter()-_q0:.3f}s", flush=True)
 
         # Merge entity-retrieved memories (overlap channel)
+        _q1 = _t.perf_counter()
         entity_direct = []
-        if entity_ids:
+        needed = max(0, k - len(direct))
+        if entity_ids and needed:
             entity_set = set(entity_ids)
             with self._env.begin() as txn:
                 for eid in entity_set:
+                    if len(entity_direct) >= needed:
+                        break
                     if eid in seen_ids:
                         continue
                     raw = txn.get(str(eid).encode())
@@ -371,34 +399,42 @@ class longTermMemory:
                         entity_direct.append(mem)
                         seen_ids.add(eid)
 
-        direct = direct + entity_direct[:k - len(direct)]  # cap total at k
+        direct = direct + entity_direct  # already capped at `needed`
+        print(f"[LTM.queryMemory:{_tid}] entity merge: {_t.perf_counter()-_q1:.3f}s (entity_ids={len(entity_ids) if entity_ids else 0})", flush=True)
 
         # Spider: stitch links before chain traversal so traversal follows more edges
+        _q2 = _t.perf_counter()
         self._stitch(direct[:3])
+        print(f"[LTM.queryMemory:{_tid}] _stitch: {_t.perf_counter()-_q2:.3f}s", flush=True)
+
+        _q3 = _t.perf_counter()
+        # Collect every linked/prev position across all direct results, then
+        # resolve them in ONE batched FAISS search instead of one search()
+        # call per position — with dense link graphs (hundreds of edges) the
+        # per-call Python/FAISS overhead, not the actual distance math, was
+        # what made this loop take seconds.
+        all_positions = []
+        for mem in direct:
+            all_positions.extend(mem.get("linkedMemories", []))
+            prev_pos = mem.get("prevPos")
+            if prev_pos:
+                all_positions.append(prev_pos)
+        total_links = len(all_positions)
 
         chain = []
-        with self._env.begin() as txn:
-            for mem in direct:
-                for linked_pos in mem.get("linkedMemories", []):
-                    lq = self._encode(linked_pos)
-                    lD, lI = self._index.search(lq, 1)
-                    linked_id = int(lI[0][0])
+        if all_positions:
+            batch = np.vstack([self._encode(p) for p in all_positions])
+            _, I_batch = self._index.search(batch, 1)
+            with self._env.begin() as txn:
+                for row in I_batch:
+                    linked_id = int(row[0])
                     if linked_id == -1 or linked_id in seen_ids:
                         continue
                     raw = txn.get(str(linked_id).encode())
                     if raw:
                         chain.append(json.loads(raw))
                         seen_ids.add(linked_id)
-                prev_pos = mem.get("prevPos")
-                if prev_pos:
-                    pq = self._encode(prev_pos)
-                    _, pI = self._index.search(pq, 1)
-                    prev_id = int(pI[0][0])
-                    if prev_id != -1 and prev_id not in seen_ids:
-                        raw = txn.get(str(prev_id).encode())
-                        if raw:
-                            chain.append(json.loads(raw))
-                            seen_ids.add(prev_id)
+        print(f"[LTM.queryMemory:{_tid}] chain traversal: {_t.perf_counter()-_q3:.3f}s (total_links={total_links}, chain={len(chain)})", flush=True)
 
         return {"direct": direct, "chain": chain}
 
@@ -542,7 +578,14 @@ class longTermMemory:
                     key_lower = self._entity_key(etype, etext.lower())
                     raw = txn.get(key_lower)
                 if raw:
-                    results[f"{etype}:{etext}"] = json.loads(raw)
+                    ids = json.loads(raw)
+                    if len(ids) > GENERIC_ENTITY_THRESHOLD:
+                        # Posting list this large means the "entity" is actually
+                        # a generic/templated word (e.g. repeated mission text),
+                        # not a useful discriminator — skip it rather than pay
+                        # to decode thousands of memories for it downstream.
+                        continue
+                    results[f"{etype}:{etext}"] = ids
         return results
 
     def resolveContentWords(self, content_words: list, top_n: int = 20) -> dict:
@@ -581,21 +624,23 @@ class longTermMemory:
             if (query_set & set(cw)) and key not in bucket_keys:
                 bucket.append(mem)
                 bucket_keys.add(key)
+            # Batch this node's linked/prev positions into one FAISS search
+            # instead of one search() call per position — with dense link
+            # graphs a node can carry dozens of links, and per-call overhead
+            # (not the distance math) is what made this loop slow.
+            positions = list(mem.get("linkedMemories", []))
             prev_pos = mem.get("prevPos")
             if prev_pos:
-                _, pI = self._index.search(self._encode(prev_pos), 1)
-                pid = int(pI[0][0])
-                if pid != -1 and pid not in visited:
-                    visited.add(pid)
-                    n = self.fetchById(pid)
-                    if n:
-                        queue.append(n)
-            for lp in mem.get("linkedMemories", []):
-                _, lI = self._index.search(self._encode(lp), 1)
-                lid = int(lI[0][0])
-                if lid != -1 and lid not in visited:
-                    visited.add(lid)
-                    n = self.fetchById(lid)
+                positions.append(prev_pos)
+            if positions:
+                batch = np.vstack([self._encode(p) for p in positions])
+                _, I_batch = self._index.search(batch, 1)
+                for row in I_batch:
+                    nid = int(row[0])
+                    if nid == -1 or nid in visited:
+                        continue
+                    visited.add(nid)
+                    n = self.fetchById(nid)
                     if n:
                         queue.append(n)
         return bucket

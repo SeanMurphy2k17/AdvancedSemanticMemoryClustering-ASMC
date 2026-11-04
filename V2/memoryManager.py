@@ -35,31 +35,35 @@ class memoryManager:
     def queryMemory(self, text: str, k: int = 10, layer1_count: int = 6,
                     platform_tag: str = None, temp: float = 0.5) -> dict:
         import time as _t
+        import threading as _th
+        _tid = _th.current_thread().name
         _t0 = _t.perf_counter()
-        print(f"[MEMORY QUERY] Step 1: converting query ({len(text.split())} words) to coordinates...", flush=True)
+        print(f"[MEMORY QUERY:{_tid}] Step 1: converting query ({len(text.split())} words) to coordinates...", flush=True)
         coord      = self._spatial._svc.computeSpatialValence(text)
-        print(f"[MEMORY QUERY] Step 2: searching recent memory... (step 1 took {_t.perf_counter()-_t0:.2f}s)", flush=True)
+        print(f"[MEMORY QUERY:{_tid}] Step 2: searching recent memory... (step 1 took {_t.perf_counter()-_t0:.2f}s)", flush=True)
         _t1 = _t.perf_counter()
         stm_spatial = self._stm.queryMemory(coord)
         stm_recent  = self._stm.get_recent(layer1_count)
         seen        = {id(m) for m in stm_spatial}
         stm_result  = stm_spatial + [m for m in stm_recent if id(m) not in seen]
-        print(f"[MEMORY QUERY] Step 3: searching long-term memory... (step 2 took {_t.perf_counter()-_t1:.2f}s)", flush=True)
+        print(f"[MEMORY QUERY:{_tid}] Step 3: searching long-term memory... (step 2 took {_t.perf_counter()-_t1:.2f}s)", flush=True)
         _t2 = _t.perf_counter()
 
         # Entity overlap channel — look up named entities from query text
+        _t3 = _t.perf_counter()
         entity_ids = set()
         entity_results = self._ltm.resolveEntities(text)
         for entity_key, mem_ids in entity_results.items():
             for mid in mem_ids:
                 entity_ids.add(mid)
-        print(f"[MEMORY QUERY] entity overlap: {len(entity_ids)} candidate IDs from {len(entity_results)} entities", flush=True)
+        print(f"[MEMORY QUERY:{_tid}] entity overlap: {len(entity_ids)} candidate IDs from {len(entity_results)} entities ({_t.perf_counter()-_t3:.2f}s)", flush=True)
 
         # Content word overlap channel — match significant words from query
+        _t4 = _t.perf_counter()
         content_words = self._spatial._svc.extractContentWords(text)
         content_id_results = self._ltm.resolveContentWords(content_words)
         content_ids = set(content_id_results.keys())
-        print(f"[MEMORY QUERY] content overlap: {len(content_ids)} candidate IDs from {len(content_words)} words", flush=True)
+        print(f"[MEMORY QUERY:{_tid}] content overlap: {len(content_ids)} candidate IDs from {len(content_words)} words ({_t.perf_counter()-_t4:.2f}s)", flush=True)
 
         # --- Dynamic temp: compute HHI from recent STM actions ---
         # HHI measures action concentration in recent memory (0.0 = diverse, 1.0 = monopolized)
@@ -80,7 +84,7 @@ class memoryManager:
                 counts = Counter(actions)
                 total = len(actions)
                 hhi = sum(c * c for c in counts.values()) / (total * total)
-                print(f"[MEMORY QUERY] HHI={hhi:.3f} temp={temp} ({len(actions)} actions, {len(counts)} unique)", flush=True)
+                print(f"[MEMORY QUERY:{_tid}] HHI={hhi:.3f} temp={temp} ({len(actions)} actions, {len(counts)} unique)", flush=True)
 
         # Apply temp-weighted channel balance
         # No actions + high temp = full semantic drift (idle agent should wander)
@@ -103,19 +107,24 @@ class memoryManager:
                         entity_list = list(entity_ids)
                         keep = max(1, int(len(entity_list) * entity_frac))
                         final_entity_ids = set(entity_list[:keep])
-            print(f"[MEMORY QUERY] entity_frac={entity_frac:.2f} semantic_frac={semantic_frac:.2f} has_actions={has_actions} entity_ids={'DISABLED' if final_entity_ids is None else len(final_entity_ids)}", flush=True)
+            print(f"[MEMORY QUERY:{_tid}] entity_frac={entity_frac:.2f} semantic_frac={semantic_frac:.2f} has_actions={has_actions} entity_ids={'DISABLED' if final_entity_ids is None else len(final_entity_ids)}", flush=True)
 
         # Merge both channels — entity overlap takes priority
         all_overlap_ids = final_entity_ids | content_ids if final_entity_ids else content_ids
+        _t5 = _t.perf_counter()
+        syn_coord = self._spatial._svc.computeWorldValence(text)
+        print(f"[MEMORY QUERY:{_tid}] computeWorldValence: {_t.perf_counter()-_t5:.2f}s", flush=True)
+        _t6 = _t.perf_counter()
         ltm_result = self._ltm.queryMemory(coord, k=k,
-                         syn_coord=self._spatial._svc.computeWorldValence(text),
+                         syn_coord=syn_coord,
                          entity_ids=all_overlap_ids if all_overlap_ids else None)
-        print(f"[MEMORY QUERY] done. Total query time: {_t.perf_counter()-_t0:.2f}s", flush=True)
+        print(f"[MEMORY QUERY:{_tid}] ltm.queryMemory call: {_t.perf_counter()-_t6:.2f}s", flush=True)
+        print(f"[MEMORY QUERY:{_tid}] done. Total query time: {_t.perf_counter()-_t0:.2f}s", flush=True)
 
         memories = [m for m in ltm_result["direct"] if not self._scm.isAnchor(m)]
         anchors  = [m for m in ltm_result["direct"] if self._scm.isAnchor(m)]
         chain    = [m for m in ltm_result["chain"]  if not self._scm.isAnchor(m)]
-        query_words   = self._spatial._svc.extractContentWords(text)
+        query_words   = content_words  # already computed above — same text
         cursor_entry  = self._ltm.fetch_platform_cursor(platform_tag) if platform_tag else None
         seed          = ([cursor_entry] + ltm_result["direct"]) if cursor_entry else ltm_result["direct"]
         semantic_raw  = self._ltm.semanticTraverse(
@@ -138,7 +147,7 @@ class memoryManager:
                     anchor_chain.append(neighbour)
 
         # Debug: show what each channel returned
-        print(f"[MEMORY QUERY] RESULTS — stm:{len(stm_result)} ltm:{len(memories)} chain:{len(chain)} semantic:{len(semantic)} anchors:{len(anchors)} anchor_chain:{len(anchor_chain)}", flush=True)
+        print(f"[MEMORY QUERY:{_tid}] RESULTS — stm:{len(stm_result)} ltm:{len(memories)} chain:{len(chain)} semantic:{len(semantic)} anchors:{len(anchors)} anchor_chain:{len(anchor_chain)}", flush=True)
         for i, m in enumerate(memories[:3]):
             meta = m.get("metaDataTag", {})
             print(f"  ltm[{i}] platform={meta.get('platform','?')} action={meta.get('action','')[:40]} input={m.get('inputText','')[:60]}", flush=True)
