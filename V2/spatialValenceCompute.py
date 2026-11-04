@@ -25,7 +25,10 @@ _NOUN_OBJECT     = wn.synset('object.n.01')
 _VERB_ACT        = wn.synset('act.v.01')
 _VERB_EXIST      = wn.synset('exist.v.01')
 
-_CACHE_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+# The word cache lives beside the store it serves (ASMC_STORE_DIR), like the
+# STM and LTM, so two stores never share one cache and the library never writes
+# into its own package folder. Without the variable it stays where it always was.
+_CACHE_DIR  = os.path.join(os.environ.get("ASMC_STORE_DIR") or os.path.dirname(os.path.abspath(__file__)),
                            "MemoryStructures", "word_cache.lmdb")
 _PACK_FMT   = "13d"  # 13 doubles = 104 bytes (6+6 accumulators + shared weight)
 

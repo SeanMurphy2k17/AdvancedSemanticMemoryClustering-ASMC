@@ -28,7 +28,9 @@ STITCH_MAX_DIST   = float(os.environ.get("ASMC_STITCH_MAX_DIST", "0.40"))  # nev
 
 class longTermMemory:
     def __init__(self):
-        base             = os.path.dirname(os.path.abspath(__file__))
+        # ASMC_STORE_DIR gives independent instances of this module their own
+        # storage (the window and the word cache resolve the same way).
+        base             = os.environ.get("ASMC_STORE_DIR") or os.path.dirname(os.path.abspath(__file__))
         self.ltm_dir     = os.path.join(base, "MemoryStructures", "LTM")
         self.faiss_path  = os.path.join(self.ltm_dir, "asmc.faiss")
         self.counter_path  = os.path.join(self.ltm_dir, "counter.json")

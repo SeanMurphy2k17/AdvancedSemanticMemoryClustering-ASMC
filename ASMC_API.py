@@ -22,6 +22,13 @@ class AdvancedSemanticMemory:
 
     def __init__(self, max_stm_entries: int = 50, ltm_db_path: str = None,
                  verbose: bool = False, enable_scm: bool = True, defer_init: bool = False):
+        # Both of these were accepted and ignored. The modules resolve their files
+        # from ASMC_STORE_DIR, so an explicit path sets it before they are built,
+        # and the window size is the class attribute the window reads.
+        if ltm_db_path:
+            os.environ["ASMC_STORE_DIR"] = os.path.abspath(ltm_db_path)
+        if max_stm_entries:
+            shortTermMemory.STM_MAX = int(max_stm_entries)
         self._mm           = memoryManager()
         self._verbose      = verbose
         self._anchor_cache = {}   # (cluster_id, coords_str) → ltm_id
