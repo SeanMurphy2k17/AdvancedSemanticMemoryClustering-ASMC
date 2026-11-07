@@ -3,9 +3,12 @@ __pycache__/
 *.pyc
 *.pyo
 
-# A store is one machine's memory: everything in it stays out of version control,
-# so pulling on another machine can never overwrite that machine's memories.
-V2/MemoryStructures/
+# A store is one machine's memory: it stays out of version control, so pulling on
+# another machine can never overwrite that machine's memories. The word cache's
+# data file is the exception: it ships with the library on purpose.
+V2/MemoryStructures/*
+!V2/MemoryStructures/word_cache.lmdb/
+V2/MemoryStructures/word_cache.lmdb/lock.mdb
 
 # Test data / editor state
 *.pdf
