@@ -3,24 +3,19 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Runtime memory data — grows in production, not for version control
-V2/MemoryStructures/STM/stm.json
-V2/MemoryStructures/LTM/data.mdb
-V2/MemoryStructures/LTM/lock.mdb
-V2/MemoryStructures/LTM/asmc.faiss
-V2/MemoryStructures/LTM/counter.json
-
-# Word cache is pre-built and committed intentionally — do NOT ignore
-# V2/MemoryStructures/word_cache.lmdb/
+# A store is one machine's memory: everything in it stays out of version control,
+# so pulling on another machine can never overwrite that machine's memories.
+V2/MemoryStructures/
 
 # Test data / editor state
 *.pdf
 imgui.ini
 
 # More runtime state (2026-11): per-platform cursors, atomic-write temp files, local backups
-V2/MemoryStructures/LTM/platform_cursors.json
-V2/MemoryStructures/LTM/*.tmp
 V2/.orig-*/
 
-# The word cache data is committed on purpose; its LMDB lock file is not data
-V2/MemoryStructures/word_cache.lmdb/lock.mdb
+# The entity's own files, beside the store: private, never in this public repo
+V2/journal.md
+V2/mood.json
+V2/name.json
+V2/PAUSE
