@@ -427,14 +427,18 @@ class longTermMemory:
             for m in pair:
                 if m is not None:
                     merged.append(m)
-        direct = [m for m in merged if (m.get("metaDataTag") or {}).get("type") != "scm_anchor"][:k] + anchors_found \
-            if anchors_found or os.environ.get("ASMC_ANCHOR_SLOTS", "0") != "1" else merged[:k]
+        # Everything both channels brought up comes back. Cutting the merged list back to k dropped whichever
+        # half came second once both were full (2026-11-13: nothing the store brings up is cut).
+        if anchors_found or os.environ.get("ASMC_ANCHOR_SLOTS", "0") != "1":
+            direct = [m for m in merged if (m.get("metaDataTag") or {}).get("type") != "scm_anchor"] + anchors_found
+        else:
+            direct = merged
         seen_ids = {int(m["metaDataTag"]["ltm_id"]) for m in direct if "ltm_id" in m.get("metaDataTag", {})}
         print(f"[LTM.queryMemory:{_tid}] entity merge: {_t.perf_counter()-_q1:.3f}s (entity_ids={len(entity_ids) if entity_ids else 0})", flush=True)
 
         # Spider: stitch links before chain traversal so traversal follows more edges
         _q2 = _t.perf_counter()
-        self._stitch(direct[:3])
+        self._stitch(direct)        # every direct result gets its links, not only the first three (2026-11-13)
         print(f"[LTM.queryMemory:{_tid}] _stitch: {_t.perf_counter()-_q2:.3f}s", flush=True)
 
         _q3 = _t.perf_counter()
@@ -452,7 +456,6 @@ class longTermMemory:
         total_links = len(all_positions)
 
         chain = []
-        seen_texts = {m.get("inputText", "") for m in direct}
         if all_positions:
             batch = np.vstack([self._encode(p) for p in all_positions])
             _, I_batch = self._index.search(batch, 1)
@@ -464,14 +467,10 @@ class longTermMemory:
                     raw = txn.get(str(linked_id).encode())
                     if not raw:
                         continue
-                    linked = json.loads(raw)
+                    # Each record once, by id. A record with the same situation text as another is its own
+                    # memory (a turn on one's own, a journal entry) and is no longer skipped (2026-11-13).
                     seen_ids.add(linked_id)
-                    # Same text stored more than once (a harness re-sending a message
-                    # across restarts) would otherwise fill consecutive chain slots.
-                    if linked.get("inputText", "") in seen_texts:
-                        continue
-                    seen_texts.add(linked.get("inputText", ""))
-                    chain.append(linked)
+                    chain.append(json.loads(raw))
         print(f"[LTM.queryMemory:{_tid}] chain traversal: {_t.perf_counter()-_q3:.3f}s (total_links={total_links}, chain={len(chain)})", flush=True)
 
         return {"direct": direct, "chain": chain}
