@@ -1,9 +1,13 @@
 import json
+import os
 import threading
 from memorySpatial import memorySpatial
 from shortTermMemory import shortTermMemory
 from longTermMemory import longTermMemory
 from spatialCompMap import spatialCompMap
+
+# How many memories the word/entity overlap channel asks for per query (the valence channel asks for k).
+OVERLAP_HITS = int(os.environ.get("ASMC_OVERLAP_HITS", "20"))
 
 
 class memoryManager:
@@ -123,6 +127,11 @@ class memoryManager:
         stm_result  = stm_overlap + [m for m in stm_spatial if id(m) not in seen]
         seen       |= {id(m) for m in stm_spatial}
         stm_result += [m for m in stm_recent if id(m) not in seen]
+        # layer1_count is the size of the ask on the recent window, the way k is on long-term memory: word matches
+        # first, then the nearest, then the newest. The radius search alone returned up to the whole window of 50
+        # (measured 2026-11-13: ~20 of the last minutes' memories on every recall, most of them still in the
+        # mind's own conversation), whatever layer1_count said.
+        stm_result  = stm_result[:layer1_count]
         print(f"[MEMORY QUERY:{_tid}] Step 3: searching long-term memory... (step 2 took {_t.perf_counter()-_t1:.2f}s)", flush=True)
         _t2 = _t.perf_counter()
 
@@ -193,6 +202,11 @@ class memoryManager:
         # interleaves it with the FAISS results instead of appending leftovers.
         ranked = list(content_id_results)
         ranked += [mid for mid in sorted(final_entity_ids or []) if mid not in ranked]
+        # The overlap channel asks for at most OVERLAP_HITS memories, the way the valence channel asks for k: the
+        # word hits (IDF-ranked, at most top_n) first, entity hits filling what is left. Measured 2026-11-13 on
+        # Moss's store: unbounded, the entity hits alone ran to hundreds a query (364 median), and one hop of
+        # links from them reached 95% of the store on every recall.
+        ranked = ranked[:OVERLAP_HITS]
         _t5 = _t.perf_counter()
         syn_coord = self._spatial._svc.computeWorldValence(text)
         print(f"[MEMORY QUERY:{_tid}] computeWorldValence: {_t.perf_counter()-_t5:.2f}s", flush=True)
